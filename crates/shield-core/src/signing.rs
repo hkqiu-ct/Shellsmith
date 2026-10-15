@@ -77,6 +77,19 @@ pub fn sign_apk_with_progress(
     mut on_progress: impl FnMut(SigningProgressStep) -> std::result::Result<(), String>,
 ) -> Result<()> {
     on_progress(SigningProgressStep::Prepare).map_err(anyhow::Error::msg)?;
+    let source_report = crate::protection_report::report_path(&opts.apk_path);
+    let mut protection_report = if source_report.exists() {
+        let report = crate::protection_report::MethodReport::read(&source_report)?;
+        anyhow::ensure!(
+            report.output_sha256.as_deref()
+                == Some(&crate::protection_report::file_sha256(&opts.apk_path)?),
+            "待签名 APK 与保护报告摘要不一致"
+        );
+        Some(report)
+    } else {
+        None
+    };
+
     let apksigner = match &opts.apksigner_path {
         Some(p) if p.exists() => p.clone(),
         Some(p) => anyhow::bail!("配置的 apksigner.jar 路径不存在: {}", p.display()),
@@ -123,7 +136,24 @@ pub fn sign_apk_with_progress(
         .output_path
         .clone()
         .unwrap_or_else(|| opts.apk_path.clone());
-    let sign_output = if final_output == opts.apk_path {
+    let staged_output = if protection_report.is_some() {
+        Some(
+            tempfile::Builder::new()
+                .prefix("shield-signed-")
+                .suffix(".apk")
+                .tempfile_in(
+                    final_output
+                        .parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .unwrap_or(Path::new(".")),
+                )?,
+        )
+    } else {
+        None
+    };
+    let sign_output = if let Some(staged) = staged_output.as_ref() {
+        staged.path().to_owned()
+    } else if final_output == opts.apk_path {
         temp_dir.path().join("signed.apk")
     } else {
         final_output.clone()
@@ -192,6 +222,16 @@ pub fn sign_apk_with_progress(
         )));
     }
 
+    if let (Some(report), Some(staged)) = (protection_report.as_mut(), staged_output) {
+        report.bind(&sign_output, false)?;
+        report.write(&crate::protection_report::report_path(&final_output))?;
+        let idsig = sign_output.with_extension("apk.idsig");
+        if idsig.exists() {
+            std::fs::rename(&idsig, final_output.with_extension("apk.idsig"))?;
+        }
+        staged.persist(&final_output).map_err(|e| e.error)?;
+        return Ok(());
+    }
     if sign_output != final_output {
         if final_output.exists() {
             std::fs::remove_file(&final_output)
@@ -204,6 +244,11 @@ pub fn sign_apk_with_progress(
                 final_output.display()
             )
         })?;
+    }
+
+    let obsolete = crate::protection_report::report_path(&final_output);
+    if obsolete.exists() {
+        std::fs::remove_file(obsolete)?;
     }
 
     Ok(())

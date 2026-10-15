@@ -62,6 +62,8 @@ export function useProtectWorkflow({
   const [protectionProfile, setProtectionProfile] = useState<ProtectionProfile>(defaults.protection_profile);
   const [aiResistance, setAiResistance] = useState<AiResistance>(defaults.ai_resistance);
   const [xopPvm2PackerPath, setXopPvm2PackerPath] = useState(defaults.xop_pvm2_packer_path);
+  const [pvm2RequiredMethods, setPvm2RequiredMethods] = useState("");
+  const [nativeVmpEvidence, setNativeVmpEvidence] = useState("");
   const [xopTrueVmpPrefixesText, setXopTrueVmpPrefixesText] = useState(defaults.xop_true_vmp_prefixes.join(", "));
   const xopTrueVmpPrefixes = useMemo(
     () => xopTrueVmpPrefixesText.split(/[,\s]+/).map((value) => value.trim()).filter(Boolean),
@@ -133,6 +135,8 @@ export function useProtectWorkflow({
     setAiResistance(defaults.ai_resistance);
     setXopPvm2PackerPath(defaults.xop_pvm2_packer_path);
     setXopTrueVmpPrefixesText(defaults.xop_true_vmp_prefixes.join(", "));
+    setPvm2RequiredMethods("");
+    setNativeVmpEvidence("");
     setOutputDirectoryMode(defaults.output_directory_mode);
     setFixedOutputDirectory(defaults.fixed_output_directory);
     taskId.current = null;
@@ -316,6 +320,8 @@ export function useProtectWorkflow({
         exclusions,
         sharingChoice,
         runtimeUi,
+        runtimeMode === "standard" ? pvm2RequiredMethods.trim() || null : null,
+        nativeVmpEvidence.trim() || null,
       );
       setFinishedAt(Date.now());
       setState("done");
@@ -331,7 +337,7 @@ export function useProtectWorkflow({
         setState("idle");
       }
     }
-  }, [aiResistance, autoSignReady, buildInfo, certificate, environmentPolicy, fixedOutputDirectory, input, locale, output, outputDirectory, outputDirectoryMode, outputFilenameError, precheck, preflight, protectionProfile, runtimeMode, runtimeUi, sharing, xopPvm2PackerPath, xopTrueVmpPrefixes]);
+  }, [aiResistance, autoSignReady, buildInfo, certificate, environmentPolicy, fixedOutputDirectory, input, locale, output, outputDirectory, outputDirectoryMode, outputFilenameError, precheck, preflight, protectionProfile, runtimeMode, runtimeUi, sharing, xopPvm2PackerPath, xopTrueVmpPrefixes, pvm2RequiredMethods, nativeVmpEvidence]);
 
   const cancel = useCallback(async () => {
     await api.cancelProtect().catch(() => undefined);
@@ -374,6 +380,8 @@ export function useProtectWorkflow({
     setXopPvm2PackerPath,
     xopTrueVmpPrefixesText,
     setXopTrueVmpPrefixesText,
+    pvm2RequiredMethods, setPvm2RequiredMethods,
+    nativeVmpEvidence, setNativeVmpEvidence,
     xopTrueVmpPrefixes,
     currentStep,
     currentDetail,

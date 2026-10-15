@@ -7,10 +7,15 @@ pub mod diagnostic;
 pub mod error;
 pub mod fusion_contract;
 pub mod keytool;
+#[doc(hidden)]
+pub mod local_secret;
+mod native_vmp;
 mod preflight;
+pub mod project_protection;
 mod protect;
 mod protect_api;
 pub mod protection_policy;
+pub mod protection_report;
 pub mod runtime_ui;
 pub use runtime_ui::{AdbPolicy, RuntimeUiProtection};
 pub mod signing;

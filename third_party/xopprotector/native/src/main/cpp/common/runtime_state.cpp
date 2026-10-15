@@ -1,4 +1,5 @@
 #include "common/runtime_state.h"
+#include "common/secure_memory.h"
 #include "vm/pvm2_format.h"
 
 #include <cstring>
@@ -8,10 +9,11 @@ namespace protector {
 CodeItem::CodeItem() = default;
 
 CodeItem::~CodeItem() {
-    if (!vm_image.empty()) {
-        memset(vm_image.data(), 0, vm_image.size());
-        vm_image.clear();
-    }
+    wipe_plaintext();
+}
+
+void CodeItem::wipe_plaintext() noexcept {
+    wipe_vector(vm_image);
     parsed_vm.reset();
 }
 

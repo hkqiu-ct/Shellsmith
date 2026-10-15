@@ -36,6 +36,7 @@ struct CodeItem {
 
     CodeItem();
     ~CodeItem();
+    void wipe_plaintext() noexcept;
     CodeItem(const CodeItem&) = delete;
     CodeItem& operator=(const CodeItem&) = delete;
 };

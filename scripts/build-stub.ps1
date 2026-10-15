@@ -410,6 +410,12 @@ Write-Host ""
 # ==========================================
 Info "步骤5: 生成 metadata.json..."
 
+# 与实际编译的 Native 源码保持一致；缺少声明不能生成可用于 PVM2 的资源包。
+$xopRoot = if ($env:MOCIKA_XOP_ROOT) { $env:MOCIKA_XOP_ROOT } else { Join-Path $ProjectRoot "third_party\xopprotector" }
+$xopHeader = Join-Path $xopRoot "native\src\main\cpp\vm\pvm2_format.h"
+$xopVersions = [regex]::Matches((Get-Content $xopHeader -Raw -ErrorAction Stop), 'PVM2_VERSION_V[0-9]+\s*=\s*([0-9]+)')
+$xopFormat = ($xopVersions | ForEach-Object { [int]$_.Groups[1].Value } | Measure-Object -Maximum).Maximum
+if (-not $xopFormat) { throw "无法读取 PVM2 格式版本，停止构建" }
 $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 @"
 {
@@ -439,6 +445,7 @@ $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
   "environment_policy": true,
   "memory_dex": false,
   "xop_pvm2": true,
+  "xop_pvm2_format": $xopFormat,
   "xop_vm_bridge": "$obfXopBridge",
   "xop_vm_bridge_method": "$obfXopBridgeMethod",
   "runtime_ui": true,
@@ -511,6 +518,7 @@ $standardMetadata = Get-Content (Join-Path $OutputDir "metadata.json") -Raw
   "memory_dex": true,
   "memory_dex_min_api": 31,
   "xop_pvm2": true,
+  "xop_pvm2_format": $xopFormat,
   "xop_vm_bridge": "$obfXopBridge",
   "xop_vm_bridge_method": "$obfXopBridgeMethod",
   "runtime_ui": true,

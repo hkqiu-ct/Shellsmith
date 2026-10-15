@@ -10,6 +10,7 @@ import java.nio.file.Files;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -18,6 +19,37 @@ public class DexCacheTest {
 
     @Rule
     public final TemporaryFolder temporaryFolder = new TemporaryFolder();
+
+    @Test
+    public void 载荷读取保留字节并拒绝伪造ZIP长度() throws Exception {
+        File apk = temporaryFolder.newFile("payload.apk");
+        byte[] payload = new byte[65537];
+        new java.util.Random(19).nextBytes(payload);
+        try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(new FileOutputStream(apk))) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("classes.dex"));
+            zip.write(payload);
+            zip.closeEntry();
+        }
+        assertArrayEquals(payload, DexCache.readPayload(apk));
+        byte[] original = Files.readAllBytes(apk.toPath());
+        int central = -1;
+        for (int i = 0; i <= original.length - 46; i++) {
+            if (original[i] == 'P' && original[i + 1] == 'K' && original[i + 2] == 1 && original[i + 3] == 2)
+                central = i;
+        }
+        assertTrue(central >= 0);
+        for (int length : new int[]{0, payload.length - 1, payload.length + 1, 256 * 1024 * 1024 + 1, -1}) {
+            byte[] changed = original.clone();
+            java.nio.ByteBuffer.wrap(changed).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(central + 24, length);
+            Files.write(apk.toPath(), changed);
+            try {
+                DexCache.readPayload(apk);
+                fail("声明长度与实际数据不一致仍被接受：" + length);
+            } catch (java.io.IOException | SecurityException expected) {
+                // 长度非法在分配前拒绝；截断和超出声明的输入也必须拒绝。
+            }
+        }
+    }
 
     @Test
     public void 完整只读缓存通过校验() throws Exception {

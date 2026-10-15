@@ -77,11 +77,11 @@ fn extract_at(dex_bytes: &[u8], mshd_pos: usize) -> Result<&[u8]> {
     Ok(&dex_bytes[len_end..len_end + payload_len])
 }
 
-pub struct ParsedPayload {
+pub struct ParsedPayload<'a> {
     pub expected_signature: String,
     pub ikm: Vec<u8>,
     pub nonce: [u8; DEXB_NONCE_LEN],
-    pub ciphertext: Vec<u8>,
+    pub ciphertext: &'a [u8],
     pub compression_layers: u8,
 }
 
@@ -93,7 +93,7 @@ pub struct DecodedPayload {
     pub native_so_key: [u8; 16],
 }
 
-pub fn parse_header(bin_data: &[u8], cert_fingerprint: &[u8]) -> Result<ParsedPayload> {
+pub fn parse_header<'a>(bin_data: &'a [u8], cert_fingerprint: &[u8]) -> Result<ParsedPayload<'a>> {
     if bin_data.len() < 12 {
         return Err(format!(
             "数据过短: {} 字节，至少需要 12 字节基础头部",
@@ -125,6 +125,9 @@ pub fn parse_header(bin_data: &[u8], cert_fingerprint: &[u8]) -> Result<ParsedPa
     match version {
         4 => Err("格式版本不支持，请重新加固".to_string()),
         5 => {
+            if bin_data.len() < 13 {
+                return Err("v5 数据过短：缺少签名长度".to_string());
+            }
             let sig_len = bin_data[12] as usize;
             let sig_start = 13usize;
             let sig_end = sig_start
@@ -162,13 +165,13 @@ pub fn parse_header(bin_data: &[u8], cert_fingerprint: &[u8]) -> Result<ParsedPa
                 expected_signature,
                 ikm,
                 nonce,
-                ciphertext: bin_data[nonce_end..].to_vec(),
+                ciphertext: &bin_data[nonce_end..],
                 compression_layers: 1,
             })
         }
         6 => {
-            if bin_data.len() < 16 {
-                return Err("v6 数据过短：缺少 flags 字段".to_string());
+            if bin_data.len() < 17 {
+                return Err("v6 数据过短：缺少 flags 或签名长度".to_string());
             }
             let flags = u32::from_le_bytes(
                 bin_data[12..16]
@@ -241,7 +244,7 @@ pub fn parse_header(bin_data: &[u8], cert_fingerprint: &[u8]) -> Result<ParsedPa
                 expected_signature,
                 ikm,
                 nonce: payload_nonce,
-                ciphertext: bin_data[nonce_end..].to_vec(),
+                ciphertext: &bin_data[nonce_end..],
                 compression_layers,
             })
         }
@@ -295,7 +298,7 @@ pub fn parse_and_decompress_payload(
         5 | 6 => {
             let payload = parse_header(bin_data, cert_fingerprint)?;
             let plaintext = crypto::decrypt(
-                &payload.ciphertext,
+                payload.ciphertext,
                 &crypto::derive_key(&payload.ikm, &payload.nonce, cert_fingerprint),
                 &payload.nonce,
             )?;
@@ -337,7 +340,7 @@ pub fn parse_xop_pvm2_payload(bin_data: &[u8], cert_fingerprint: &[u8]) -> Resul
     }
     let payload = parse_header(bin_data, cert_fingerprint)?;
     let plaintext = crypto::decrypt(
-        &payload.ciphertext,
+        payload.ciphertext,
         &crypto::derive_key(&payload.ikm, &payload.nonce, cert_fingerprint),
         &payload.nonce,
     )?;
@@ -573,6 +576,14 @@ mod tests {
         bin.extend_from_slice(&nonce);
         bin.extend_from_slice(&ciphertext);
 
+        let header = parse_header(&bin, signature.as_bytes()).unwrap();
+        assert_eq!(
+            header.ciphertext.as_ptr(),
+            bin[bin.len() - ciphertext.len()..].as_ptr()
+        );
+        for end in 0..bin.len() {
+            assert!(parse_and_decompress_all(&bin[..end], signature.as_bytes()).is_err());
+        }
         let (expected_sig, dex_files) =
             parse_and_decompress_all(&bin, signature.as_bytes()).unwrap();
         assert_eq!(expected_sig, signature);
@@ -679,6 +690,14 @@ mod tests {
         bin.extend_from_slice(&ciphertext);
 
         assert!(!bin.windows(ikm.len()).any(|window| window == ikm));
+        let header = parse_header(&bin, signature.as_bytes()).unwrap();
+        assert_eq!(
+            header.ciphertext.as_ptr(),
+            bin[bin.len() - ciphertext.len()..].as_ptr()
+        );
+        for end in 0..bin.len() {
+            assert!(parse_and_decompress_all(&bin[..end], signature.as_bytes()).is_err());
+        }
         let (expected_sig, dex_files) =
             parse_and_decompress_all(&bin, signature.as_bytes()).unwrap();
         assert_eq!(expected_sig, signature);

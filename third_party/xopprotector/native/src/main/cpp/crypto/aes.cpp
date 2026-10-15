@@ -1,4 +1,5 @@
 #include "crypto/aes.h"
+#include "common/secure_memory.h"
 
 #include <cstring>
 
@@ -77,9 +78,7 @@ static void mix_columns(uint8_t state[16]) {
     }
 }
 
-void aes128_encrypt_block(const uint8_t key[16], const uint8_t in[16], uint8_t out[16]) {
-    uint8_t rk[176];
-    key_expansion(key, rk);
+static void encrypt_expanded_block(const uint8_t rk[176], const uint8_t in[16], uint8_t out[16]) {
     uint8_t state[16];
     memcpy(state, in, 16);
     add_round_key(state, rk);
@@ -93,6 +92,14 @@ void aes128_encrypt_block(const uint8_t key[16], const uint8_t in[16], uint8_t o
     shift_rows(state);
     add_round_key(state, rk + 160);
     memcpy(out, state, 16);
+    secure_wipe(state, sizeof(state));
+}
+
+void aes128_encrypt_block(const uint8_t key[16], const uint8_t in[16], uint8_t out[16]) {
+    uint8_t rk[176];
+    key_expansion(key, rk);
+    encrypt_expanded_block(rk, in, out);
+    secure_wipe(rk, sizeof(rk));
 }
 
 static void ctr_inc(uint8_t counter[16]) {
@@ -102,11 +109,14 @@ static void ctr_inc(uint8_t counter[16]) {
 }
 
 void aes128_ctr_crypt(const uint8_t key[16], const uint8_t* in, uint8_t* out, size_t len) {
+    if (len == 0) return;
+    uint8_t rk[176];
+    key_expansion(key, rk);
     uint8_t counter[16] = {0};
     uint8_t keystream[16];
     size_t offset = 0;
     while (offset < len) {
-        aes128_encrypt_block(key, counter, keystream);
+        encrypt_expanded_block(rk, counter, keystream);
         size_t n = len - offset;
         if (n > 16) n = 16;
         for (size_t i = 0; i < n; i++) {
@@ -115,26 +125,34 @@ void aes128_ctr_crypt(const uint8_t key[16], const uint8_t* in, uint8_t* out, si
         offset += n;
         ctr_inc(counter);
     }
+    secure_wipe(rk, sizeof(rk));
+    secure_wipe(keystream, sizeof(keystream));
 }
 
 // ── GCM (AES-128) ──────────────────────────────────────────────────
 
 static void gf_mult(const uint8_t X[16], const uint8_t Y[16], uint8_t out[16]) {
-    uint8_t V[16];
-    uint8_t Z[16] = {0};
-    memcpy(V, Y, 16);
-    for (int i = 0; i < 128; i++) {
-        if ((X[i / 8] >> (7 - (i % 8))) & 1) {
-            for (int j = 0; j < 16; j++) Z[j] ^= V[j];
-        }
-        bool lsb = (V[15] & 1) != 0;
-        for (int j = 15; j > 0; j--) {
-            V[j] = static_cast<uint8_t>((V[j] >> 1) | ((V[j - 1] & 1) << 7));
-        }
-        V[0] >>= 1;
-        if (lsb) V[0] ^= 0xe1;
+    // 保留原 GHASH 位序和约简多项式，按两个 64 位字运算，减少每位的 16 字节搬移。
+    // 显式大端读取支持未对齐输入，不依赖宿主字节序或 CPU 加密扩展。
+    uint64_t x[2] = {}, v[2] = {}, z[2] = {};
+    for (int i = 0; i < 16; i++) {
+        x[i / 8] = (x[i / 8] << 8) | X[i];
+        v[i / 8] = (v[i / 8] << 8) | Y[i];
     }
-    memcpy(out, Z, 16);
+    for (int word = 0; word < 2; word++) {
+        for (int bit = 63; bit >= 0; bit--) {
+            uint64_t mask = uint64_t{0} - ((x[word] >> bit) & 1);
+            z[0] ^= v[0] & mask;
+            z[1] ^= v[1] & mask;
+            uint64_t reduce = uint64_t{0} - (v[1] & 1);
+            v[1] = (v[1] >> 1) | (v[0] << 63);
+            v[0] = (v[0] >> 1) ^ (0xe100000000000000ULL & reduce);
+        }
+    }
+    for (int i = 0; i < 16; i++) out[i] = static_cast<uint8_t>(z[i / 8] >> (56 - (i % 8) * 8));
+    secure_wipe(x, sizeof(x));
+    secure_wipe(v, sizeof(v));
+    secure_wipe(z, sizeof(z));
 }
 
 static void ghash(const uint8_t H[16], const uint8_t* aad, size_t aad_len,
@@ -184,7 +202,7 @@ static void gcm_ctr32_inc(uint8_t counter[16]) {
 bool aes128_gcm_decrypt(const uint8_t key[16],
                         const uint8_t* enc, size_t enc_len,
                         uint8_t* plain, size_t plain_len) {
-    if (enc == nullptr || plain == nullptr) return false;
+    if (key == nullptr || enc == nullptr || plain == nullptr) return false;
     if (enc_len < GCM_NONCE_LEN + GCM_TAG_LEN) return false;
     size_t ct_len = enc_len - GCM_NONCE_LEN - GCM_TAG_LEN;
     if (ct_len != plain_len) return false;
@@ -193,9 +211,12 @@ bool aes128_gcm_decrypt(const uint8_t key[16],
     const uint8_t* ct = enc + GCM_NONCE_LEN;
     const uint8_t* tag = enc + GCM_NONCE_LEN + ct_len;
 
+    // 轮密钥只在本次调用内复用，认证失败和正常退出均清理，不进入全局缓存。
+    uint8_t rk[176];
+    key_expansion(key, rk);
     uint8_t H[16];
     uint8_t zero[16] = {0};
-    aes128_encrypt_block(key, zero, H);
+    encrypt_expanded_block(rk, zero, H);
 
     uint8_t J0[16] = {0};
     memcpy(J0, nonce, GCM_NONCE_LEN);
@@ -205,13 +226,19 @@ bool aes128_gcm_decrypt(const uint8_t key[16],
     ghash(H, nullptr, 0, ct, ct_len, S);
 
     uint8_t E0[16];
-    aes128_encrypt_block(key, J0, E0);
+    encrypt_expanded_block(rk, J0, E0);
     uint8_t expected[16];
     for (int i = 0; i < 16; i++) expected[i] = S[i] ^ E0[i];
 
     int diff = 0;
     for (int i = 0; i < 16; i++) diff |= expected[i] ^ tag[i];
-    if (diff != 0) return false;
+    secure_wipe(H, sizeof(H));
+    secure_wipe(E0, sizeof(E0));
+    secure_wipe(expected, sizeof(expected));
+    if (diff != 0) {
+        secure_wipe(rk, sizeof(rk));
+        return false;
+    }
 
     uint8_t counter[16];
     memcpy(counter, J0, 16);
@@ -220,7 +247,7 @@ bool aes128_gcm_decrypt(const uint8_t key[16],
     size_t offset = 0;
     while (offset < ct_len) {
         uint8_t ks[16];
-        aes128_encrypt_block(key, counter, ks);
+        encrypt_expanded_block(rk, counter, ks);
         size_t n = ct_len - offset;
         if (n > 16) n = 16;
         for (size_t i = 0; i < n; i++) {
@@ -228,7 +255,9 @@ bool aes128_gcm_decrypt(const uint8_t key[16],
         }
         offset += n;
         gcm_ctr32_inc(counter);
+        secure_wipe(ks, sizeof(ks));
     }
+    secure_wipe(rk, sizeof(rk));
     return true;
 }
 
@@ -240,12 +269,15 @@ bool aes128_gcm_encrypt(const uint8_t key[16],
             || out_len == nullptr) {
         return false;
     }
+    if (out_cap < GCM_NONCE_LEN + GCM_TAG_LEN
+            || plain_len > out_cap - GCM_NONCE_LEN - GCM_TAG_LEN) return false;
     size_t need = GCM_NONCE_LEN + plain_len + GCM_TAG_LEN;
-    if (out_cap < need) return false;
 
+    uint8_t rk[176];
+    key_expansion(key, rk);
     uint8_t H[16];
     uint8_t zero[16] = {0};
-    aes128_encrypt_block(key, zero, H);
+    encrypt_expanded_block(rk, zero, H);
 
     uint8_t J0[16] = {0};
     memcpy(J0, nonce, GCM_NONCE_LEN);
@@ -261,7 +293,7 @@ bool aes128_gcm_encrypt(const uint8_t key[16],
     size_t offset = 0;
     while (offset < plain_len) {
         uint8_t ks[16];
-        aes128_encrypt_block(key, counter, ks);
+        encrypt_expanded_block(rk, counter, ks);
         size_t n = plain_len - offset;
         if (n > 16) n = 16;
         for (size_t i = 0; i < n; i++) {
@@ -269,23 +301,31 @@ bool aes128_gcm_encrypt(const uint8_t key[16],
         }
         offset += n;
         gcm_ctr32_inc(counter);
+        secure_wipe(ks, sizeof(ks));
     }
 
     uint8_t S[16];
     ghash(H, nullptr, 0, ct, plain_len, S);
 
     uint8_t E0[16];
-    aes128_encrypt_block(key, J0, E0);
+    encrypt_expanded_block(rk, J0, E0);
     uint8_t* tag = out + GCM_NONCE_LEN + plain_len;
     for (int i = 0; i < 16; i++) tag[i] = S[i] ^ E0[i];
 
     *out_len = need;
+    secure_wipe(rk, sizeof(rk));
+    secure_wipe(H, sizeof(H));
+    secure_wipe(E0, sizeof(E0));
     return true;
 }
 
 // ── Self-test vs Java javax.crypto reference vectors (CryptoUtils) ──
 // Keep AES self-test vectors out of .bitcode (packer encrypts that whole section).
+#if defined(__APPLE__)
+#define PROT_RODATA __attribute__((section("__TEXT,__prot"), used))
+#else
 #define PROT_RODATA __attribute__((section(".rodata.prot"), used))
+#endif
 
 bool aes_self_test() {
     uint8_t key[16];
@@ -295,7 +335,7 @@ bool aes_self_test() {
 
     // Java AES/CTR/NoPadding + zero IV
     static const uint8_t kCtrExpected[32] PROT_RODATA = {
-        0xd6,0xb0,0x29,0x24,0x93,0x9a,0x4d,0x95,0x75,0x56,0x9b,0x79,0xbd,0xd5,0xc6,0x66,
+        0xd6,0xb0,0x29,0x24,0x93,0x9a,0x4d,0x95,0x77,0x56,0x9b,0x79,0xbd,0xd5,0xc6,0x66,
         0x53,0x67,0x31,0xb6,0xb1,0xe5,0x92,0x39,0x61,0x52,0x97,0xc8,0x49,0xd9,0x03,0x25
     };
     uint8_t ctr_out[32];

@@ -21,6 +21,12 @@ public final class MainActivity extends Activity {
             String value = (String) probe.getDeclaredMethod("message", int.class).invoke(null, 7);
             if (!"feature-14".equals(value)) throw new IllegalStateException(value);
             Log.i("MocikaFeature", "MOCIKA_DYNAMIC_FEATURE_OK");
+            if (getIntent().getBooleanExtra("verify_native_vmp", false)) {
+                Class<?> conditional = Class.forName("dev.mocika.shield.featurefixture.conditional.ConditionalProbe");
+                Object calls = conditional.getDeclaredMethod("verifyNative").invoke(null);
+                if (!Integer.valueOf(1000).equals(calls)) throw new IllegalStateException("Native 检查未完成");
+                Log.i("MocikaFeature", "NATIVE_VMP_APP_OK calls=1000");
+            }
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(getAssets().open("mocika_install_asset.txt")))) {
                 Log.i("MocikaFeature", reader.readLine());

@@ -5,16 +5,11 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.List;
 
 public class Ld {
-
-    private static final int DEX_READ_BUFFER_SIZE = 8192;
-    private static final int MAX_DEX_SIZE_BYTES = 256 * 1024 * 1024; // 256 MiB 合理上限
 
     static {
         System.loadLibrary("mocikanativeslot");
@@ -76,19 +71,26 @@ public class Ld {
     /** 每次启动的环境安全检查；位 0 表示反调试，位 1 表示高置信 Root。 */
     static native int r();
 
+    /** 进程级策略：0 阻断、1 兼容、2 严格；阻断后不能重置。 */
+    static native void y(int policy);
+
     static void initializeEmbeddedRuntime(Context ctx) throws Exception {
         ApplicationInfo info = ctx.getPackageManager().getApplicationInfo(
                 ctx.getPackageName(), PackageManager.GET_META_DATA);
         if (info.metaData == null
                 || !info.metaData.getBoolean("dev.mocika.shield.XOP_PVM2", false)) return;
-        if (!t(ctx, readClassesDexFromApk(ctx))) throw new RuntimeException("L08");
+        MemoryRuntimeProfiler profiler = MemoryRuntimeProfiler.start();
+        byte[] dexBytes = readClassesDexFromApk(ctx);
+        if (profiler != null) profiler.stage("cache_apk_read", 0, dexBytes.length);
+        if (!t(ctx, dexBytes)) throw new RuntimeException("L08");
+        if (profiler != null) profiler.stage("cache_pvm2_init", 0, 0);
     }
 
     /**
      * 解密并返回各 DEX 字节数组，缓存身份与落盘由 DexCache 统一处理。
      */
     static byte[][] decryptDexBytes(Context ctx) throws Exception {
-        return decryptDexBytes(ctx, null);
+        return decryptDexBytes(ctx, MemoryRuntimeProfiler.start());
     }
 
     static byte[][] decryptDexBytes(Context ctx, MemoryRuntimeProfiler profiler) throws Exception {
@@ -118,28 +120,7 @@ public class Ld {
     }
 
     private static byte[] readClassesDexFromApk(Context ctx) throws Exception {
-        String apkPath = ctx.getApplicationInfo().sourceDir;
-        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(apkPath)) {
-            java.util.zip.ZipEntry entry = zip.getEntry("classes.dex");
-            if (entry == null) throw new RuntimeException("L04");
-            long entrySize = entry.getSize();
-            if (entrySize > MAX_DEX_SIZE_BYTES) {
-                throw new RuntimeException("L05");
-            }
-            int initCapacity = entrySize > 0 ? (int) entrySize : DEX_READ_BUFFER_SIZE * 16;
-            try (InputStream is = zip.getInputStream(entry)) {
-                ByteArrayOutputStream bos = new ByteArrayOutputStream(initCapacity);
-                byte[] buf = new byte[DEX_READ_BUFFER_SIZE];
-                int read;
-                while ((read = is.read(buf)) != -1) {
-                    bos.write(buf, 0, read);
-                    if (bos.size() > MAX_DEX_SIZE_BYTES) {
-                        throw new RuntimeException("L06");
-                    }
-                }
-                return bos.toByteArray();
-            }
-        }
+        return DexCache.readPayload(new File(ctx.getApplicationInfo().sourceDir));
     }
 
     private static long totalBytes(byte[][] dexes) {

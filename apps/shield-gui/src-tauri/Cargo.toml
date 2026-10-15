@@ -1,6 +1,6 @@
 [package]
 name = "mocika-shield"
-version = "1.7.0"
+version = "1.8.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
@@ -31,9 +31,7 @@ url = "2"
 toml = "0.8"
 rusqlite = { version = "0.37", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
-chacha20poly1305 = { workspace = true }
 sha2 = { workspace = true }
-rand = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

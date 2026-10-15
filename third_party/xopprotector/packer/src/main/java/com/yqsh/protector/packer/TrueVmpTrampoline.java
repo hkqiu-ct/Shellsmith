@@ -17,6 +17,7 @@ import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile;
 import com.android.tools.smali.dexlib2.iface.ClassDef;
 import com.android.tools.smali.dexlib2.iface.Method;
 import com.android.tools.smali.dexlib2.iface.MethodImplementation;
+import com.android.tools.smali.dexlib2.iface.instruction.*;
 import com.android.tools.smali.dexlib2.iface.reference.MethodReference;
 import com.android.tools.smali.dexlib2.immutable.ImmutableClassDef;
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethod;
@@ -258,7 +259,8 @@ public final class TrueVmpTrampoline {
         for (ClassDef c : outClasses) {
             pool.internClass(c);
         }
-        pool.writeTo(new FileDataStore(tmp));
+        FileDataStore store = new FileDataStore(tmp);
+        try { pool.writeTo(store); } finally { store.close(); }
         Files.move(tmp.toPath(), dexFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
         System.out.println("TRUE_VMP trampoline rewritten methods=" + rewritten
                 + " dexIndex=" + dexIndex);
@@ -429,6 +431,36 @@ public final class TrueVmpTrampoline {
                 break;
         }
         return impl;
+    }
+
+    /** 对比整个受支持跳板的操作码、寄存器、常量和引用，不能只检查开头或桥调用。 */
+    static boolean matches(Method method, int dexIndex, int methodIndex, String bridge, String bridgeMethod) {
+        MethodImplementation actual = method.getImplementation();
+        MethodImplementation expected = buildTrampoline(method, dexIndex, methodIndex, bridge, bridgeMethod);
+        if (actual == null || actual.getRegisterCount() != expected.getRegisterCount()
+                || !actual.getTryBlocks().isEmpty()) return false;
+        var a = actual.getInstructions().iterator();
+        var b = expected.getInstructions().iterator();
+        while (a.hasNext() && b.hasNext()) {
+            if (!operands(a.next()).equals(operands(b.next()))) return false;
+        }
+        return !a.hasNext() && !b.hasNext();
+    }
+
+    private static List<Object> operands(Instruction instruction) {
+        List<Object> values = new ArrayList<>();
+        values.add(instruction.getOpcode());
+        if (instruction instanceof OneRegisterInstruction i) values.add(i.getRegisterA());
+        if (instruction instanceof TwoRegisterInstruction i) values.add(i.getRegisterB());
+        if (instruction instanceof ThreeRegisterInstruction i) values.add(i.getRegisterC());
+        if (instruction instanceof VariableRegisterInstruction i) values.add(i.getRegisterCount());
+        if (instruction instanceof FiveRegisterInstruction i) {
+            values.add(i.getRegisterC()); values.add(i.getRegisterD()); values.add(i.getRegisterE());
+            values.add(i.getRegisterF()); values.add(i.getRegisterG());
+        }
+        if (instruction instanceof WideLiteralInstruction i) values.add(i.getWideLiteral());
+        if (instruction instanceof ReferenceInstruction i) values.add(i.getReference());
+        return values;
     }
 
     private static void invokeStatic1(MutableMethodImplementation impl,

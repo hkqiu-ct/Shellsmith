@@ -3,8 +3,8 @@ import { MessageSquarePlus } from "lucide-react";
 import { AppButton, PillSegment, SettingsFieldRow, SettingsGroup, StatusMessage } from "@/components/app/common";
 import { FeedbackDialog } from "@/components/app/feedback-dialog";
 import { t, type Locale } from "@/lib/i18n";
-import { notifyError } from "@/lib/notify";
-import { api, type ThemeMode } from "@/lib/tauri";
+import { notifyError, notifySuccess } from "@/lib/notify";
+import { api, openFileDialog, saveProjectBackupDialog, type ProtectionProject, type ThemeMode } from "@/lib/tauri";
 
 export function SettingsPage({
   locale,
@@ -26,6 +26,37 @@ export function SettingsPage({
   const [status, setStatus] = useState<"idle" | "saved" | "failed">("idle");
   const [error, setError] = useState("");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [projects, setProjects] = useState<ProtectionProject[]>([]);
+  const [projectBusy, setProjectBusy] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    void api.listProtectionProjects().then((items) => { if (!disposed) setProjects(items); })
+      .catch((err) => { if (!disposed) notifyError(String(err)); });
+    return () => { disposed = true; };
+  }, []);
+
+  async function backupProject(project?: ProtectionProject) {
+    setProjectBusy(true);
+    try {
+      const path = project
+        ? await saveProjectBackupDialog(`${project.package_name}.protection-backup.json`)
+        : await openFileDialog(t(locale, "protectionProjectRestore"), ["json"]);
+      if (!path) return;
+      if (project) {
+        await api.exportProtectionProject(project.id, path);
+        notifySuccess(t(locale, "protectionProjectSaved"));
+      } else {
+        await api.importProtectionProject(path);
+        setProjects(await api.listProtectionProjects());
+        notifySuccess(t(locale, "protectionProjectRestored"));
+      }
+    } catch (err) {
+      notifyError(String(err));
+    } finally {
+      setProjectBusy(false);
+    }
+  }
+
   const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -110,6 +141,28 @@ export function SettingsPage({
               />
             </div>
           </SettingsFieldRow>
+        </SettingsGroup>
+        <SettingsGroup title={t(locale, "protectionProjects")}>
+          <div className="space-y-4 px-6 py-5">
+            <p className="text-sm leading-6 text-muted-foreground">{t(locale, "protectionProjectsHint")}</p>
+            {projects.length === 0 && <p className="text-sm text-muted-foreground">{t(locale, "protectionProjectsEmpty")}</p>}
+            {projects.map((project) => (
+              <div key={project.id} className="space-y-3 rounded-lg border p-4">
+                <details>
+                  <summary className="cursor-pointer break-all text-sm font-medium">{project.package_name}</summary>
+                  <dl className="mt-3 space-y-2 text-xs">
+                    <dt className="text-muted-foreground">{t(locale, "protectionProjectId")}</dt>
+                    <dd className="break-all font-mono">{project.id}</dd>
+                    <dt className="text-muted-foreground">{t(locale, "protectionProjectCert")}</dt>
+                    <dd className="break-all font-mono">{project.certificate_sha256}</dd>
+                  </dl>
+                </details>
+                <AppButton disabled={projectBusy} onClick={() => void backupProject(project)}>{t(locale, "protectionProjectBackup")}</AppButton>
+              </div>
+            ))}
+            <AppButton disabled={projectBusy} onClick={() => void backupProject()}>{t(locale, "protectionProjectRestore")}</AppButton>
+            <p className="text-xs leading-5 text-muted-foreground">{t(locale, "protectionProjectSecretHint")}</p>
+          </div>
         </SettingsGroup>
         <SettingsGroup title={t(locale, "feedbackTitle")}>
           <div className="space-y-3 px-6 py-5">

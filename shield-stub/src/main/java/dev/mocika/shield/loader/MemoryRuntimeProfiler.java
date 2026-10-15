@@ -5,7 +5,7 @@ import android.util.Log;
 
 import dev.mocika.shield.stub.BuildConfig;
 
-/** 仅供内存候选资源记录启动阶段，不持久化状态或参与运行决策。 */
+/** 仅供显式启用的诊断构建记录启动阶段，不持久化状态或参与运行决策。 */
 final class MemoryRuntimeProfiler {
     private static final String TAG = "mxp";
 
@@ -35,7 +35,8 @@ final class MemoryRuntimeProfiler {
                 + " total_ms=" + totalMillis
                 + " dex_count=" + dexCount
                 + " dex_bytes=" + dexBytes
-                + " heap_used_kb=" + heapUsedKb);
+                + " heap_used_kb=" + heapUsedKb
+                + " native_heap_kb=" + android.os.Debug.getNativeHeapAllocatedSize() / 1024);
         previousAt = now;
     }
 

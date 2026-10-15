@@ -1,10 +1,39 @@
 #include "vm/pvm2_format.h"
 #include "common/log.h"
+#include "common/secure_memory.h"
 
 #include <algorithm>
 #include <cstring>
 
 namespace protector::vm {
+
+Pvm2Image::~Pvm2Image() { wipe(); }
+
+void Pvm2Image::wipe() noexcept {
+    for (auto* pool : {&strings, &methods, &fields, &types}) {
+        for (auto& value : *pool) secure_wipe(value.data(), value.size());
+        std::vector<std::string>().swap(*pool);
+    }
+    wipe_vector(code);
+    wipe_vector(reg_map);
+    wipe_vector(argument_types);
+    wipe_vector(handlers);
+    secure_wipe(inv_map.data(), inv_map.size());
+    secure_wipe(&imm_key, sizeof(imm_key));
+    valid = false;
+    clear_after_use = false;
+}
+
+size_t Pvm2Image::plaintext_bytes() const noexcept {
+    size_t bytes = sizeof(*this) + code.capacity() + reg_map.capacity() + argument_types.capacity()
+            + handlers.capacity() * sizeof(Pvm2Handler);
+    for (const auto* pool : {&strings, &methods, &fields, &types}) {
+        bytes += pool->capacity() * sizeof(std::string);
+        for (const auto& value : *pool) bytes += value.capacity() + 1;
+    }
+    // 包含字符串内联存储的保守重复计数；不代表进程 RSS 或分配器元数据。
+    return bytes;
+}
 
 static uint16_t read_u16(const uint8_t* p) {
     uint16_t v;
@@ -62,17 +91,14 @@ static void set_identity_map(Pvm2Image* out) {
 }
 
 bool parse_pvm2(const uint8_t* data, size_t size, Pvm2Image* out) {
-    if (out == nullptr || data == nullptr || size < 18) {
-        return false;
-    }
-    out->valid = false;
-    out->strings.clear();
-    out->methods.clear();
-    out->fields.clear();
-    out->types.clear();
-    out->handlers.clear();
-    out->code.clear();
-    out->reg_map.clear();
+    if (out == nullptr) return false;
+    out->wipe();
+    // 所有失败出口（含已填充部分池）都清理；成功由 CodeItem 生命周期接管。
+    struct ParseCleanup {
+        Pvm2Image* image;
+        ~ParseCleanup() { if (!image->valid) image->wipe(); }
+    } cleanup{out};
+    if (data == nullptr || size < 18) return false;
     set_identity_map(out);
 
     if (memcmp(data, "PVM2", 4) != 0) {
@@ -91,7 +117,8 @@ bool parse_pvm2(const uint8_t* data, size_t size, Pvm2Image* out) {
 
     if (out->version != PVM2_VERSION_V1 && out->version != PVM2_VERSION_V2
             && out->version != PVM2_VERSION_V3 && out->version != PVM2_VERSION_V4
-            && out->version != PVM2_VERSION_V5 && out->version != PVM2_VERSION_V6) {
+            && out->version != PVM2_VERSION_V5 && out->version != PVM2_VERSION_V6
+            && out->version != PVM2_VERSION_V7 && out->version != PVM2_VERSION_V8) {
         PLOGE("PVM2 unsupported version %u", out->version);
         return false;
     }
@@ -110,6 +137,10 @@ bool parse_pvm2(const uint8_t* data, size_t size, Pvm2Image* out) {
     }
 
     size_t cursor = 18;
+    if (out->version >= PVM2_VERSION_V7) {
+        if (cursor >= size || data[cursor] > 1) return false;
+        out->clear_after_use = data[cursor++] == 1;
+    }
     if (!read_string_pool(data, size, &cursor, str_count, &out->strings)) {
         PLOGE("PVM2 strings truncated");
         return false;
@@ -209,11 +240,22 @@ bool parse_pvm2(const uint8_t* data, size_t size, Pvm2Image* out) {
             }
         }
 
-        out->handlers.reserve(out->handler_count);
-        std::vector<std::pair<uint16_t, Pvm2Handler>> ordered_handlers;
-        if (out->version >= PVM2_VERSION_V6) {
-            ordered_handlers.reserve(out->handler_count);
+        if (out->version >= PVM2_VERSION_V8) {
+            if (cursor >= size) return false;
+            uint8_t count = data[cursor++];
+            if (count > size - cursor) return false;
+            out->argument_types.assign(data + cursor, data + cursor + count);
+            cursor += count;
+            unsigned slots = 0;
+            for (uint8_t kind : out->argument_types) {
+                if (kind != 'I' && kind != 'J' && kind != 'Z' && kind != 'F' && kind != 'D' && kind != 'L') return false;
+                slots += kind == 'J' || kind == 'D' ? 2 : 1;
+            }
+            if (slots != out->ins_size || slots + out->scratch_extra > out->reg_count) return false;
         }
+
+        out->handlers.resize(out->handler_count);
+        std::vector<bool> seen_priorities(out->handler_count, false);
         for (uint16_t i = 0; i < out->handler_count; i++) {
             const size_t handler_size = out->version >= PVM2_VERSION_V6 ? 10u : 8u;
             if (cursor + handler_size > size) {
@@ -227,33 +269,23 @@ bool parse_pvm2(const uint8_t* data, size_t size, Pvm2Image* out) {
             h.catch_type_idx = read_u16(data + cursor + 6);
             if (out->version >= PVM2_VERSION_V6) {
                 uint16_t priority = read_u16(data + cursor + 8);
-                if (priority >= out->handler_count) {
+                if (priority >= out->handler_count || seen_priorities[priority]) {
                     PLOGE("PVM2 bad handler priority %u", priority);
                     return false;
                 }
-                ordered_handlers.emplace_back(priority, h);
+                seen_priorities[priority] = true;
+                out->handlers[priority] = h;
             } else {
-                out->handlers.push_back(h);
+                out->handlers[i] = h;
             }
             cursor += handler_size;
-        }
-        if (out->version >= PVM2_VERSION_V6) {
-            std::sort(ordered_handlers.begin(), ordered_handlers.end(),
-                      [](const auto& a, const auto& b) { return a.first < b.first; });
-            for (uint16_t i = 0; i < ordered_handlers.size(); i++) {
-                if (ordered_handlers[i].first != i) {
-                    PLOGE("PVM2 duplicate handler priority");
-                    return false;
-                }
-                out->handlers.push_back(ordered_handlers[i].second);
-            }
         }
     } else if (out->handler_count != 0) {
         PLOGE("PVM2 v1 unexpected handler_count %u", out->handler_count);
         return false;
     }
 
-    if (cursor + out->code_size > size) {
+    if (cursor + out->code_size != size) {
         PLOGE("PVM2 code truncated");
         return false;
     }

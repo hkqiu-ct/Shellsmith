@@ -67,6 +67,8 @@ pub(crate) fn run_protect(args: ResolvedProtectArgs) -> Result<()> {
         },
         xop_pvm2_packer_path: args.xop_pvm2_packer,
         xop_true_vmp_prefixes: args.xop_true_vmp_prefix,
+        pvm2_required_methods: args.pvm2_required_methods,
+        native_vmp_evidence: args.native_vmp_evidence,
         external_pvm2_dex_dir: None,
         external_pas2_assets_dir: None,
         deferred_pas2_asset_modules: Vec::new(),
@@ -183,6 +185,7 @@ pub fn run_protect_aab_with_control(
     if !args.input.is_file() {
         anyhow::bail!("输入 AAB 不存在：{}", args.input.display());
     }
+    shield_core::protection_report::checked_archive(&args.input)?;
     if args.input == args.output {
         anyhow::bail!("输入和输出 AAB 不能是同一路径");
     }
@@ -211,9 +214,11 @@ pub fn run_protect_aab_with_control(
         if !matches!(args.engine, ProtectionEngineArg::Mocika) {
             anyhow::bail!("AAB 多模块当前只支持 Shellsmith 单 Stub + 嵌入式 PVM2");
         }
-        if args.xop_pvm2_packer.is_none() || args.xop_true_vmp_prefix.is_empty() {
+        if args.xop_pvm2_packer.is_none()
+            || (args.xop_true_vmp_prefix.is_empty() && args.pvm2_required_methods.is_none())
+        {
             anyhow::bail!(
-                "AAB 多模块必须配置嵌入式 Xop PVM2 Packer 和业务类前缀，确保代码/资源模块共用单 Stub 密钥生命周期"
+                "AAB 多模块必须配置嵌入式 Xop PVM2 Packer 和业务类前缀或关键方法清单，确保代码/资源模块共用单 Stub 密钥生命周期"
             );
         }
     }
@@ -260,9 +265,13 @@ pub fn run_protect_aab_with_control(
         );
     }
     if matches!(args.engine, ProtectionEngineArg::Xop) {
-        if args.xop_pvm2_packer.is_some() || !args.xop_true_vmp_prefix.is_empty() {
+        if args.xop_pvm2_packer.is_some()
+            || !args.xop_true_vmp_prefix.is_empty()
+            || args.pvm2_required_methods.is_some()
+            || args.native_vmp_evidence.is_some()
+        {
             anyhow::bail!(
-                "--xop-pvm2-packer/--xop-true-vmp-prefix 只用于 --engine mocika；--engine xop 使用独立 Xop 单壳"
+                "--xop-pvm2-packer/--xop-true-vmp-prefix/--pvm2-required-methods/--native-vmp-evidence 只用于 --engine mocika；--engine xop 使用独立 Xop 单壳"
             );
         }
         let packer = args
@@ -421,6 +430,8 @@ pub fn run_protect_aab_with_control(
                 },
                 xop_pvm2_packer_path: args.xop_pvm2_packer.clone(),
                 xop_true_vmp_prefixes: args.xop_true_vmp_prefix.clone(),
+                pvm2_required_methods: args.pvm2_required_methods.clone(),
+                native_vmp_evidence: args.native_vmp_evidence.clone(),
                 external_pvm2_dex_dir: (!extra_module_dirs.is_empty())
                     .then_some(extra_modules_root.clone()),
                 external_pas2_assets_dir: has_external_assets.then_some(extra_modules_root.clone()),
@@ -516,9 +527,18 @@ pub fn run_protect_aab_with_control(
     )?;
     on_progress("SignAab", "使用所选上传证书签署 AAB");
     ensure_aab_not_cancelled(&cancel)?;
+    let staged_aab = tempfile::Builder::new()
+        .prefix("shield-aab-")
+        .suffix(".aab")
+        .tempfile_in(
+            args.output
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(std::path::Path::new(".")),
+        )?;
     sign_aab_with_jarsigner(
         &unsigned_aab,
-        &args.output,
+        staged_aab.path(),
         &args.ks,
         &args.key_alias,
         &pass,
@@ -527,7 +547,24 @@ pub fn run_protect_aab_with_control(
     )?;
     on_progress("ValidateBundle", "使用 bundletool 校验最终 AAB");
     ensure_aab_not_cancelled(&cancel)?;
-    run_bundletool_validate(&args.bundletool, &args.output)?;
+    run_bundletool_validate(&args.bundletool, staged_aab.path())?;
+    if matches!(args.engine, ProtectionEngineArg::Mocika)
+        && (args.xop_pvm2_packer.is_some() || args.native_vmp_evidence.is_some())
+    {
+        shield_core::protection_report::rebind_report(
+            &protected_apk,
+            staged_aab.path(),
+            &shield_core::protection_report::report_path(&args.output),
+            true,
+            Some(&args.input),
+        )?;
+    } else {
+        let obsolete = shield_core::protection_report::report_path(&args.output);
+        if obsolete.exists() {
+            std::fs::remove_file(obsolete)?;
+        }
+    }
+    staged_aab.persist(&args.output).map_err(|e| e.error)?;
     let mut device_install = "not-requested";
     let mut smoke_test = "not-requested";
     if let Some(apks_output) = args.apks_output.as_ref() {

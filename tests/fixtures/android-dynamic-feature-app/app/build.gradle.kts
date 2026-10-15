@@ -7,7 +7,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.mocika.shield.featurefixture"
+        applicationId = providers.gradleProperty("fixtureApplicationId").getOrElse("dev.mocika.shield.featurefixture")
         minSdk = 21
         targetSdk = 35
         versionCode = 1

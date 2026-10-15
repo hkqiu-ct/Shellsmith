@@ -1,6 +1,18 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+
+export type ProtectionProject = {
+  schema_version: number;
+  id: string;
+  package_name: string;
+  certificate_sha256: string;
+  created_at: number;
+};
+
+export async function saveProjectBackupDialog(defaultPath: string) {
+  return save({ defaultPath, filters: [{ name: "JSON", extensions: ["json"] }] });
+}
 
 export type SignConfig = {
   keystore_path?: string | null;
@@ -300,6 +312,8 @@ export type AabProtectRequest = {
   protectionProfile: "compat" | "balanced" | "strict";
   aiResistance: "off" | "balanced" | "high";
   xopTrueVmpPrefixes: string[];
+  pvm2RequiredMethods?: string | null;
+  nativeVmpEvidence?: string | null;
 };
 
 export type TaskKind = "protect" | "ios_protect" | "sign" | "update";
@@ -422,7 +436,7 @@ export const api = {
     invoke<ApkCheckResult>("check_apk", { path, runtimeMode, certificateId: certificateId ?? null }),
   checkAab: (path: string) => invoke<AabInspection>("check_aab", { path }),
   protectAab: (request: AabProtectRequest) => invoke<void>("protect_aab", { request }),
-  protectApk: (taskId: string, input: string, output: string, runtimeMode: "standard" | "android_api19", environmentPolicy: "compatible" | "strict", protectionProfile: "compat" | "balanced" | "strict", aiResistance: "off" | "balanced" | "high", xopPvm2PackerPath: string | null, xopTrueVmpPrefixes: string[], signedOutput?: string | null, certificateId?: string | null, excludedAbis: string[] = [], sharing: SharingChoice | null = null, runtimeUi: RuntimeUiProtection = defaultRuntimeUi) =>
+  protectApk: (taskId: string, input: string, output: string, runtimeMode: "standard" | "android_api19", environmentPolicy: "compatible" | "strict", protectionProfile: "compat" | "balanced" | "strict", aiResistance: "off" | "balanced" | "high", xopPvm2PackerPath: string | null, xopTrueVmpPrefixes: string[], signedOutput?: string | null, certificateId?: string | null, excludedAbis: string[] = [], sharing: SharingChoice | null = null, runtimeUi: RuntimeUiProtection = defaultRuntimeUi, pvm2RequiredMethods: string | null = null, nativeVmpEvidence: string | null = null) =>
     invoke<void>("protect_apk", {
       request: {
         taskId,
@@ -438,6 +452,8 @@ export const api = {
         aiResistance,
         xopPvm2PackerPath,
         xopTrueVmpPrefixes,
+        pvm2RequiredMethods,
+        nativeVmpEvidence,
         excludedAbis,
         certificateId: certificateId ?? null,
       },
@@ -454,6 +470,9 @@ export const api = {
   checkFileExists: (path: string) => invoke<boolean>("check_file_exists", { path }),
   showInFolder: (path: string) => invoke<void>("show_in_folder", { path }),
   deleteFile: (path: string) => invoke<void>("delete_file", { path }),
+  listProtectionProjects: () => invoke<ProtectionProject[]>("list_protection_projects"),
+  exportProtectionProject: (id: string, path: string) => invoke<void>("export_protection_project", { id, path }),
+  importProtectionProject: (path: string) => invoke<ProtectionProject>("import_protection_project", { path }),
   getAppConfig: () => invoke<AppConfig>("get_app_config"),
   saveAppConfig: (config: AppConfig) => invoke<void>("save_app_config", { config }),
   saveProtectDefaults: (defaults: ProtectDefaults) => invoke<void>("save_protect_defaults", { defaults }),

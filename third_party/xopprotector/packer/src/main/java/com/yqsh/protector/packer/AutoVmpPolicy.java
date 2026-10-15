@@ -106,10 +106,17 @@ public final class AutoVmpPolicy {
                                         boolean industryEffective,
                                         List<String> trueVmpPrefixes,
                                         String appPackagePrefix) {
+        return exclusionReason(typeDescriptor) == null
+                && matchesRequestedScope(typeDescriptor, paymentEffective, industryEffective,
+                        trueVmpPrefixes, appPackagePrefix);
+    }
+
+    /** 兼容性排除只影响执行准入，不能从用户选择范围的覆盖率分母中消失。 */
+    static String exclusionReason(String typeDescriptor) {
         // D8/R8 bridge bodies only forward captured state to real business methods.
         // Moving them behind JNI changes callback receiver/lifecycle semantics on ART.
         if (isCompilerGeneratedBridge(typeDescriptor)) {
-            return false;
+            return "compiler_generated_bridge";
         }
         // Room/LiveData/Retrofit/Glide are runtime infrastructure rather than
         // business algorithms. Their generated state machines, cursor mapping,
@@ -117,13 +124,21 @@ public final class AutoVmpPolicy {
         // them on ART prevents an empty local list or missing resource callback
         // when the app's own code is virtualized.
         if (isDataAndResourceRuntimeGlue(typeDescriptor)) {
-            return false;
+            return "data_resource_runtime_glue";
         }
         // UI and navigation glue is callback/lifecycle driven. It contributes little
         // protection value and must keep Android/AndroidX receiver semantics on ART.
         if (isUiRuntimeGlue(typeDescriptor)) {
-            return false;
+            return "ui_runtime_glue";
         }
+        return null;
+    }
+
+    public static boolean matchesRequestedScope(String typeDescriptor,
+                                                boolean paymentEffective,
+                                                boolean industryEffective,
+                                                List<String> trueVmpPrefixes,
+                                                String appPackagePrefix) {
         if (paymentEffective && PaymentVmpRules.matches(typeDescriptor)) {
             return true;
         }

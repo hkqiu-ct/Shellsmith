@@ -10,6 +10,7 @@ import android.util.Log;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.DataInputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.security.MessageDigest;
@@ -26,6 +27,22 @@ final class DexCache {
     private static final int BUFFER_SIZE = 8192;
 
     private DexCache() {}
+
+    /** 三种加载路径共用：按 ZIP 声明长度读满，避免整块缓冲的二次复制。 */
+    static byte[] readPayload(File apk) throws Exception {
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(apk)) {
+            java.util.zip.ZipEntry entry = zip.getEntry("classes.dex");
+            if (entry == null) throw new SecurityException("L04");
+            long size = entry.getSize();
+            if (size <= 0 || size > 256 * 1024 * 1024) throw new SecurityException("L05");
+            byte[] bytes = new byte[(int) size];
+            try (DataInputStream input = new DataInputStream(zip.getInputStream(entry))) {
+                input.readFully(bytes);
+                if (input.read() != -1) throw new SecurityException("L06");
+            }
+            return bytes;
+        }
+    }
 
     static List<File> load(Context context) throws Exception {
         Identity identity = readIdentity(context);

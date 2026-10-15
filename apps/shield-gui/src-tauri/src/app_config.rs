@@ -463,3 +463,28 @@ theme_mode = "system"
         assert_eq!(normalized.fixed_output_directory, "/tmp/output");
     }
 }
+
+#[tauri::command]
+pub(crate) fn list_protection_projects(
+) -> Result<Vec<shield_core::project_protection::ProjectIdentity>, String> {
+    let directory =
+        shield_core::project_protection::default_directory().map_err(|e| e.to_string())?;
+    shield_core::project_protection::list(&directory).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(crate) fn export_protection_project(id: String, path: String) -> Result<(), String> {
+    let directory =
+        shield_core::project_protection::default_directory().map_err(|e| e.to_string())?;
+    shield_core::project_protection::export(&directory, &id, Path::new(&path))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(crate) fn import_protection_project(
+    path: String,
+) -> Result<shield_core::project_protection::ProjectIdentity, String> {
+    let directory =
+        shield_core::project_protection::default_directory().map_err(|e| e.to_string())?;
+    shield_core::project_protection::import(&directory, Path::new(&path)).map_err(|e| e.to_string())
+}

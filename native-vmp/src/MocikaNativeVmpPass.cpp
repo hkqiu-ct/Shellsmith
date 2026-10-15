@@ -1,6 +1,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -12,6 +13,14 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/JSON.h"
+#include "llvm/Support/SHA256.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Transforms/Scalar/SROA.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Utils/LowerSwitch.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -47,6 +56,10 @@ enum Opcode : uint8_t {
     OP_BR = 21,
     OP_CBR = 22,
     OP_RET = 23,
+    OP_FADD = 24, OP_FSUB = 25, OP_FMUL = 26, OP_FDIV = 27, OP_FREM = 28,
+    OP_FNEG = 29, OP_FCMP = 30, OP_FPTRUNC = 31, OP_FPEXT = 32,
+    OP_FPTOUI = 33, OP_FPTOSI = 34, OP_UITOFP = 35, OP_SITOFP = 36,
+    OP_BITCAST = 37, OP_FMA = 38,
 };
 
 class Bytecode {
@@ -93,11 +106,13 @@ struct BranchPatch {
                        F.getName() + "': " + Message, false);
 }
 
-uint8_t integerWidth(const Function &F, Type *Ty, StringRef Context) {
+uint8_t scalarWidth(const Function &F, Type *Ty, StringRef Context) {
+    if (Ty->isFloatTy()) return 32;
+    if (Ty->isDoubleTy()) return 64;
     auto *Integer = dyn_cast<IntegerType>(Ty);
     if (Integer == nullptr || Integer->getBitWidth() == 0 ||
         Integer->getBitWidth() > 64) {
-        fail(F, Twine(Context) + " must be an integer no wider than 64 bits");
+        fail(F, Twine(Context) + " must be an integer no wider than 64 bits, float or double");
     }
     return static_cast<uint8_t>(Integer->getBitWidth());
 }
@@ -111,7 +126,7 @@ uint64_t hashText(StringRef Text, uint64_t Seed) {
     return Hash;
 }
 
-uint8_t opcodeKey(const Module &M, const Function &F) {
+uint64_t programSeed(const Module &M, const Function &F) {
     uint64_t Seed = 0;
     if (const char *Configured = std::getenv("MOCIKA_VMP_SEED")) {
         Seed = hashText(Configured, 0);
@@ -119,9 +134,9 @@ uint8_t opcodeKey(const Module &M, const Function &F) {
         std::random_device Device;
         Seed = (static_cast<uint64_t>(Device()) << 32) ^ Device();
     }
-    Seed = hashText(M.getModuleIdentifier(), Seed);
+    Seed = hashText(M.getSourceFileName(), Seed);
     Seed = hashText(F.getName(), Seed);
-    return static_cast<uint8_t>((Seed % 255) + 1);
+    return Seed;
 }
 
 SmallVector<Function *, 8> annotatedFunctions(Module &M) {
@@ -157,7 +172,7 @@ SmallVector<Function *, 8> annotatedFunctions(Module &M) {
 class FunctionEncoder {
   public:
     FunctionEncoder(Module &M, Function &F)
-        : M(M), F(F), Key(opcodeKey(M, F)) {}
+        : M(M), F(F), Seed(programSeed(M, F)), Key(static_cast<uint8_t>((Seed % 255) + 1)) {}
 
     std::vector<uint8_t> encode() {
         validateSignature();
@@ -168,10 +183,11 @@ class FunctionEncoder {
         Code.u8('V');
         Code.u8('M');
         Code.u8('P');
-        Code.u8(1);
+        Code.u8(2);
         Code.u8(Key);
-        Code.u16(static_cast<uint16_t>(Registers.size()));
+        Code.u16(static_cast<uint16_t>(std::max<size_t>(1, Registers.size())));
         Code.u16(static_cast<uint16_t>(F.arg_size()));
+        Code.u64(Seed);
 
         for (BasicBlock &Block : F) {
             BlockOffsets[&Block] = static_cast<uint32_t>(Code.size());
@@ -191,12 +207,21 @@ class FunctionEncoder {
             }
             Code.patchU32(Patch.Position, Found->second);
         }
-        return std::vector<uint8_t>(Code.data().begin(), Code.data().end());
+        std::vector<uint8_t> Bytes(Code.data().begin(), Code.data().end());
+        // ponytail: 位置编码只减少直接模式匹配，种子随包携带，不提供离线机密性。
+        for (size_t I = 18; I < Bytes.size(); ++I) {
+            uint64_t X = Seed + I * UINT64_C(0x9e3779b97f4a7c15);
+            X = (X ^ (X >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+            X = (X ^ (X >> 27)) * UINT64_C(0x94d049bb133111eb);
+            Bytes[I] ^= static_cast<uint8_t>(X ^ (X >> 31));
+        }
+        return Bytes;
     }
 
   private:
     Module &M;
     Function &F;
+    uint64_t Seed;
     uint8_t Key;
     Bytecode Code;
     DenseMap<const Value *, uint16_t> Registers;
@@ -208,12 +233,13 @@ class FunctionEncoder {
         if (F.isDeclaration() || F.isVarArg()) {
             fail(F, "it must be a defined, non-variadic function");
         }
-        integerWidth(F, F.getReturnType(), "return type");
+        if (F.hasFnAttribute(Attribute::StrictFP)) fail(F, "strict floating-point environment is unsupported");
+        scalarWidth(F, F.getReturnType(), "return type");
         if (F.arg_size() > UINT16_MAX) {
             fail(F, "too many arguments");
         }
         for (Argument &Argument : F.args()) {
-            integerWidth(F, Argument.getType(), "argument type");
+            scalarWidth(F, Argument.getType(), "argument type");
         }
     }
 
@@ -235,9 +261,6 @@ class FunctionEncoder {
                 }
             }
         }
-        if (Registers.empty()) {
-            fail(F, "no VM registers were generated");
-        }
     }
 
     uint16_t checkedRegister(uint32_t Register) {
@@ -252,34 +275,44 @@ class FunctionEncoder {
             if (isa<DbgInfoIntrinsic>(Instruction)) {
                 continue;
             }
+            if (auto *Call = dyn_cast<IntrinsicInst>(&Instruction)) {
+                if (Call->getIntrinsicID() == Intrinsic::fma || Call->getIntrinsicID() == Intrinsic::fmuladd) {
+                    scalarWidth(F, Call->getType(), "fused multiply-add result");
+                    continue;
+                }
+            }
             if (auto *Binary = dyn_cast<BinaryOperator>(&Instruction)) {
                 if (binaryOpcode(Binary->getOpcode()) == 0) {
                     fail(F, Twine("unsupported binary instruction: ") +
                                 Binary->getOpcodeName());
                 }
-                integerWidth(F, Binary->getType(), "binary result");
+                scalarWidth(F, Binary->getType(), "binary result");
                 continue;
             }
-            if (auto *Compare = dyn_cast<ICmpInst>(&Instruction)) {
-                integerWidth(F, Compare->getOperand(0)->getType(),
+            if (auto *Compare = dyn_cast<CmpInst>(&Instruction)) {
+                scalarWidth(F, Compare->getOperand(0)->getType(),
                              "comparison operand");
                 continue;
             }
+            if (Instruction.getOpcode() == Instruction::FNeg) {
+                scalarWidth(F, Instruction.getType(), "negation result");
+                continue;
+            }
             if (auto *Select = dyn_cast<SelectInst>(&Instruction)) {
-                integerWidth(F, Select->getType(), "select result");
+                scalarWidth(F, Select->getType(), "select result");
                 continue;
             }
             if (auto *Cast = dyn_cast<CastInst>(&Instruction)) {
-                if (!isa<TruncInst, ZExtInst, SExtInst>(Cast)) {
+                if (!isa<TruncInst, ZExtInst, SExtInst, FPTruncInst, FPExtInst, FPToUIInst, FPToSIInst, UIToFPInst, SIToFPInst, BitCastInst>(Cast)) {
                     fail(F, Twine("unsupported cast instruction: ") +
                                 Cast->getOpcodeName());
                 }
-                integerWidth(F, Cast->getSrcTy(), "cast source");
-                integerWidth(F, Cast->getDestTy(), "cast destination");
+                scalarWidth(F, Cast->getSrcTy(), "cast source");
+                scalarWidth(F, Cast->getDestTy(), "cast destination");
                 continue;
             }
             if (auto *Phi = dyn_cast<PHINode>(&Instruction)) {
-                integerWidth(F, Phi->getType(), "phi result");
+                scalarWidth(F, Phi->getType(), "phi result");
                 if (Phi->getNumIncomingValues() == 0 ||
                     Phi->getNumIncomingValues() > UINT16_MAX) {
                     fail(F, "phi incoming count is invalid");
@@ -306,6 +339,11 @@ class FunctionEncoder {
 
     uint8_t binaryOpcode(unsigned LLVMOpcode) const {
         switch (LLVMOpcode) {
+            case Instruction::FAdd: return OP_FADD;
+            case Instruction::FSub: return OP_FSUB;
+            case Instruction::FMul: return OP_FMUL;
+            case Instruction::FDiv: return OP_FDIV;
+            case Instruction::FRem: return OP_FREM;
             case Instruction::Add: return OP_ADD;
             case Instruction::Sub: return OP_SUB;
             case Instruction::Mul: return OP_MUL;
@@ -339,33 +377,52 @@ class FunctionEncoder {
             Code.u64(Integer->getValue().zextOrTrunc(64).getZExtValue());
             return;
         }
+        if (auto *Floating = dyn_cast<ConstantFP>(Value)) {
+            Code.u8(1);
+            Code.u64(Floating->getValueAPF().bitcastToAPInt().getZExtValue());
+            return;
+        }
         Code.u8(0);
         Code.u16(reg(Value));
     }
 
     void encodeInstruction(Instruction &Instruction) {
+        if (auto *Call = dyn_cast<IntrinsicInst>(&Instruction)) {
+            if (Call->getIntrinsicID() == Intrinsic::fma || Call->getIntrinsicID() == Intrinsic::fmuladd) {
+                opcode(OP_FMA); Code.u16(reg(Call)); Code.u8(scalarWidth(F, Call->getType(), "fused multiply-add result"));
+                for (unsigned I = 0; I < 3; ++I) value(Call->getArgOperand(I));
+                return;
+            }
+        }
         if (auto *Binary = dyn_cast<BinaryOperator>(&Instruction)) {
             opcode(binaryOpcode(Binary->getOpcode()));
             Code.u16(reg(Binary));
-            Code.u8(integerWidth(F, Binary->getType(), "binary result"));
+            Code.u8(scalarWidth(F, Binary->getType(), "binary result"));
             value(Binary->getOperand(0));
             value(Binary->getOperand(1));
             return;
         }
-        if (auto *Compare = dyn_cast<ICmpInst>(&Instruction)) {
-            opcode(OP_ICMP);
+        if (auto *Compare = dyn_cast<CmpInst>(&Instruction)) {
+            opcode(isa<FCmpInst>(Compare) ? OP_FCMP : OP_ICMP);
             Code.u16(reg(Compare));
-            Code.u8(integerWidth(F, Compare->getOperand(0)->getType(),
+            Code.u8(scalarWidth(F, Compare->getOperand(0)->getType(),
                                  "comparison operand"));
-            Code.u8(comparePredicate(Compare->getPredicate()));
+            Code.u8(isa<FCmpInst>(Compare) ? static_cast<uint8_t>(Compare->getPredicate()) : comparePredicate(Compare->getPredicate()));
             value(Compare->getOperand(0));
             value(Compare->getOperand(1));
+            return;
+        }
+        if (Instruction.getOpcode() == Instruction::FNeg) {
+            opcode(OP_FNEG);
+            Code.u16(reg(&Instruction));
+            Code.u8(scalarWidth(F, Instruction.getType(), "negation result"));
+            value(Instruction.getOperand(0));
             return;
         }
         if (auto *Select = dyn_cast<SelectInst>(&Instruction)) {
             opcode(OP_SELECT);
             Code.u16(reg(Select));
-            Code.u8(integerWidth(F, Select->getType(), "select result"));
+            Code.u8(scalarWidth(F, Select->getType(), "select result"));
             value(Select->getCondition());
             value(Select->getTrueValue());
             value(Select->getFalseValue());
@@ -374,17 +431,23 @@ class FunctionEncoder {
         if (auto *Cast = dyn_cast<CastInst>(&Instruction)) {
             opcode(isa<TruncInst>(Cast) ? OP_TRUNC
                    : isa<ZExtInst>(Cast) ? OP_ZEXT
-                                         : OP_SEXT);
+                   : isa<SExtInst>(Cast) ? OP_SEXT
+                   : isa<FPTruncInst>(Cast) ? OP_FPTRUNC
+                   : isa<FPExtInst>(Cast) ? OP_FPEXT
+                   : isa<FPToUIInst>(Cast) ? OP_FPTOUI
+                   : isa<FPToSIInst>(Cast) ? OP_FPTOSI
+                   : isa<UIToFPInst>(Cast) ? OP_UITOFP
+                   : isa<SIToFPInst>(Cast) ? OP_SITOFP : OP_BITCAST);
             Code.u16(reg(Cast));
-            Code.u8(integerWidth(F, Cast->getSrcTy(), "cast source"));
-            Code.u8(integerWidth(F, Cast->getDestTy(), "cast destination"));
+            Code.u8(scalarWidth(F, Cast->getSrcTy(), "cast source"));
+            Code.u8(scalarWidth(F, Cast->getDestTy(), "cast destination"));
             value(Cast->getOperand(0));
             return;
         }
         if (auto *Phi = dyn_cast<PHINode>(&Instruction)) {
             opcode(OP_PHI);
             Code.u16(reg(Phi));
-            Code.u8(integerWidth(F, Phi->getType(), "phi result"));
+            Code.u8(scalarWidth(F, Phi->getType(), "phi result"));
             Code.u16(static_cast<uint16_t>(Phi->getNumIncomingValues()));
             for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
                 Code.u16(BlockIds.lookup(Phi->getIncomingBlock(I)));
@@ -406,7 +469,7 @@ class FunctionEncoder {
         }
         if (auto *Return = dyn_cast<ReturnInst>(&Instruction)) {
             opcode(OP_RET);
-            Code.u8(integerWidth(F, F.getReturnType(), "return type"));
+            Code.u8(scalarWidth(F, F.getReturnType(), "return type"));
             value(Return->getReturnValue());
             return;
         }
@@ -452,7 +515,9 @@ void replaceWithInterpreter(Module &M, Function &F,
     FunctionCallee Runtime = M.getOrInsertFunction("mocika_vmp_exec_i64", RuntimeType);
     FunctionCallee Trap = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::trap);
 
+    const auto Linkage = F.getLinkage();
     F.deleteBody();
+    F.setLinkage(Linkage);
     F.removeFnAttr(Attribute::AlwaysInline);
     F.addFnAttr(Attribute::NoInline);
     if (F.hasPersonalityFn()) {
@@ -473,7 +538,10 @@ void replaceWithInterpreter(Module &M, Function &F,
         Value *Slot = Builder.CreateInBoundsGEP(
             ArgumentsType, Arguments,
             {Zero, ConstantInt::get(I32, Index++)});
-        Builder.CreateStore(Builder.CreateZExtOrTrunc(&Argument, I64), Slot);
+        Value *Bits = &Argument;
+        if (Argument.getType()->isFloatingPointTy())
+            Bits = Builder.CreateBitCast(Bits, IntegerType::get(Context, scalarWidth(F, Argument.getType(), "argument")));
+        Builder.CreateStore(Builder.CreateZExtOrTrunc(Bits, I64), Slot);
     }
     Value *ArgumentsPointer = Builder.CreateInBoundsGEP(
         ArgumentsType, Arguments, {Zero, Zero});
@@ -484,6 +552,9 @@ void replaceWithInterpreter(Module &M, Function &F,
         {ProgramGlobal, ConstantInt::get(I32, Program.size()), ArgumentsPointer,
          ConstantInt::get(I32, F.arg_size()), Ok},
         "mocika.vmp.result");
+    // 清理桥接参数副本，volatile 保证优化后仍执行；不承诺清理调用者或 CPU 寄存器。
+    Builder.CreateMemSet(Arguments, ConstantInt::get(Type::getInt8Ty(Context), 0),
+                         StorageCount * 8, MaybeAlign(8), true);
     Value *Succeeded = Builder.CreateICmpEQ(
         Builder.CreateLoad(I32, Ok), ConstantInt::get(I32, 1));
     Builder.CreateCondBr(Succeeded, Success, Failure);
@@ -493,22 +564,91 @@ void replaceWithInterpreter(Module &M, Function &F,
     Builder.CreateUnreachable();
 
     Builder.SetInsertPoint(Success);
-    Builder.CreateRet(Builder.CreateTruncOrBitCast(Result, F.getReturnType()));
+    Value *ReturnBits = Builder.CreateZExtOrTrunc(Result,
+        IntegerType::get(Context, scalarWidth(F, F.getReturnType(), "return type")));
+    Builder.CreateRet(F.getReturnType()->isFloatingPointTy()
+        ? Builder.CreateBitCast(ReturnBits, F.getReturnType()) : ReturnBits);
 }
 
 class MocikaNativeVmpPass : public PassInfoMixin<MocikaNativeVmpPass> {
   public:
-    PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
+    PreservedAnalyses run(Module &M, ModuleAnalysisManager &Analyses) {
         SmallVector<Function *, 8> Functions = annotatedFunctions(M);
-        if (Functions.empty()) {
-            return PreservedAnalyses::all();
-        }
+        json::Array Records;
+        auto &FunctionAnalyses = Analyses.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
         for (Function *F : Functions) {
+            if ((!F->hasLocalLinkage() && !F->hasExternalLinkage()) || F->hasComdat()) {
+                fail(*F, "weak/linkonce/comdat definitions are not supported; use a single non-inline definition");
+            }
+            // 只做函数内 SSA 规范化；先替换原体，再允许跨函数优化或向量化。
+            F->removeFnAttr(Attribute::OptimizeNone);
+            FunctionPassManager Normalize;
+            Normalize.addPass(SROAPass(SROAOptions::ModifyCFG));
+            Normalize.addPass(InstCombinePass());
+            Normalize.addPass(SimplifyCFGPass());
+            // 复用 LLVM 将 switch 及其 PHI 边转换为现有 VM 支持的比较/分支。
+            Normalize.addPass(LowerSwitchPass());
+            Normalize.run(*F, FunctionAnalyses);
+            // InstCombine 会把整数限幅变成 min/max 内建；复用 LLVM 的谓词映射回比较/选择。
+            for (Instruction &I : make_early_inc_range(instructions(*F))) {
+                if (auto *MinMax = dyn_cast<MinMaxIntrinsic>(&I)) {
+                    scalarWidth(*F, MinMax->getType(), "min/max result");
+                    IRBuilder<> Builder(MinMax);
+                    Value *L = MinMax->getLHS(), *R = MinMax->getRHS();
+                    Value *Compare = Builder.CreateICmp(MinMax->getPredicate(), L, R);
+                    MinMax->replaceAllUsesWith(Builder.CreateSelect(Compare, L, R));
+                    MinMax->eraseFromParent();
+                } else if (auto *Call = dyn_cast<IntrinsicInst>(&I)) {
+                    const auto Id = Call->getIntrinsicID();
+                    if (Id != Intrinsic::fshl && Id != Intrinsic::fshr) continue;
+                    const unsigned Width = scalarWidth(*F, Call->getType(), "funnel shift result");
+                    const bool Left = Id == Intrinsic::fshl;
+                    Value *A = Call->getArgOperand(0), *B = Call->getArgOperand(1);
+                    Value *ZeroShift = Left ? A : B;
+                    IRBuilder<> Builder(Call);
+                    Value *Result = ZeroShift;
+                    if (Width > 1) {
+                        Value *Size = ConstantInt::get(Call->getType(), Width);
+                        Value *Shift = Builder.CreateURem(Call->getArgOperand(2), Size);
+                        // 两侧都按位宽取模，避免零位移时执行 shift-by-width（LLVM poison）。
+                        Value *Reverse = Builder.CreateURem(Builder.CreateSub(Size, Shift), Size);
+                        Value *Combined = Builder.CreateOr(
+                            Builder.CreateShl(A, Left ? Shift : Reverse),
+                            Builder.CreateLShr(B, Left ? Reverse : Shift));
+                        Result = Builder.CreateSelect(Builder.CreateICmpEQ(Shift,
+                            ConstantInt::get(Call->getType(), 0)), ZeroShift, Combined);
+                    }
+                    Call->replaceAllUsesWith(Result);
+                    Call->eraseFromParent();
+                }
+            }
+            const std::string OriginalSymbol = F->getName().str();
             FunctionEncoder Encoder(M, *F);
             const std::vector<uint8_t> Program = Encoder.encode();
             replaceWithInterpreter(M, *F, Program);
+            // 保持内部链接，且让不同源文件的同名 static 函数能在最终 ELF 中逐项核验。
+            if (F->hasLocalLinkage()) {
+                const std::string Source = M.getSourceFileName();
+                F->setName(OriginalSymbol + "." + toHex(SHA256::hash(arrayRefFromStringRef(Source)), true));
+            }
+            Records.push_back(json::Object{
+                {"original_symbol", OriginalSymbol},
+                {"symbol", F->getName().str()},
+                {"program_bytes", static_cast<int64_t>(Program.size())},
+                {"program_sha256", toHex(SHA256::hash(Program), true)}});
         }
-        return PreservedAnalyses::none();
+        // 报告只在全部标注函数成功替换后写出；空模块也要显式记录，避免复用旧报告。
+        if (const char *Path = std::getenv("MOCIKA_VMP_COMPILE_REPORT")) {
+            std::error_code Error;
+            raw_fd_ostream Output(Path, Error, sys::fs::OF_Text);
+            if (Error) report_fatal_error("无法写入 Native VMP 转换报告", false);
+            Output << json::Value(json::Object{
+                {"schema_version", 1}, {"target", M.getTargetTriple().str()},
+                {"functions", std::move(Records)}}) << '\n';
+            Output.close();
+            if (Output.has_error()) report_fatal_error("Native VMP 转换报告写入失败", false);
+        }
+        return Functions.empty() ? PreservedAnalyses::all() : PreservedAnalyses::none();
     }
 };
 
@@ -520,9 +660,8 @@ extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
         "MocikaNativeVmpPass",
         "1.0.0",
         [](PassBuilder &Builder) {
-            Builder.registerOptimizerLastEPCallback(
-                [](ModulePassManager &Manager, OptimizationLevel,
-                   ThinOrFullLTOPhase) {
+            Builder.registerPipelineStartEPCallback(
+                [](ModulePassManager &Manager, OptimizationLevel) {
                     Manager.addPass(MocikaNativeVmpPass());
                 });
             Builder.registerPipelineParsingCallback(

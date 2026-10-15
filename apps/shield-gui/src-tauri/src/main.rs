@@ -82,6 +82,8 @@ struct ProtectRequest {
     xop_pvm2_packer_path: Option<String>,
     #[serde(default)]
     xop_true_vmp_prefixes: Vec<String>,
+    pvm2_required_methods: Option<String>,
+    native_vmp_evidence: Option<String>,
     certificate_id: Option<String>,
 }
 
@@ -220,6 +222,8 @@ async fn protect_apk(
             ai_resistance: request.ai_resistance,
             xop_pvm2_packer_path: request.xop_pvm2_packer_path,
             xop_true_vmp_prefixes: request.xop_true_vmp_prefixes,
+            pvm2_required_methods: request.pvm2_required_methods,
+            native_vmp_evidence: request.native_vmp_evidence,
             signing_certificate,
             signed_output: request.signed_output,
         },
@@ -574,6 +578,9 @@ fn main() {
             check_file_exists,
             delete_file,
             check_apk,
+            app_config::list_protection_projects,
+            app_config::export_protection_project,
+            app_config::import_protection_project,
             get_app_config,
             save_app_config,
             save_protect_defaults,

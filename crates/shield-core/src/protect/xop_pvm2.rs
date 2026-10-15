@@ -89,9 +89,15 @@ pub(crate) fn transform_native_sos(
     apk_dir: &Path,
     ikm: &[u8],
     signature: &str,
-) -> Result<NativeSoTransformReport> {
+    record_evidence: bool,
+) -> Result<(
+    NativeSoTransformReport,
+    BTreeMap<String, crate::native_vmp::NativeTransition>,
+)> {
     let key = crate::dex_packer::derive_native_so_key(ikm, signature);
-    let output = no_window_command(java)
+    let evidence = record_evidence.then(NamedTempFile::new).transpose()?;
+    let mut command = no_window_command(java);
+    command
         .arg("-jar")
         .arg(packer)
         .arg("native-so-transform")
@@ -99,7 +105,11 @@ pub(crate) fn transform_native_sos(
         .arg(apk_dir)
         .env("MOCIKA_NATIVE_SO_KEY_HEX", hex_lower(&key))
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(file) = &evidence {
+        command.arg("--report-out").arg(file.path());
+    }
+    let output = command
         .output()
         .context("启动 Xop Native SO transform-only 失败")?;
     if !output.status.success() {
@@ -123,7 +133,23 @@ pub(crate) fn transform_native_sos(
             anyhow::bail!("Native SO 保护报告中的文件/名称计数无效");
         }
     }
-    Ok(report)
+    let transitions = if let Some(file) = evidence {
+        #[derive(serde::Deserialize)]
+        struct Evidence {
+            schema_version: u32,
+            libraries: BTreeMap<String, crate::native_vmp::NativeTransition>,
+        }
+        let detail: Evidence = serde_json::from_slice(&fs::read(file.path())?)
+            .context("Packer 未输出 PSO2 还原核验记录，请重建 Packer")?;
+        anyhow::ensure!(
+            detail.schema_version == 1 && detail.libraries.len() == report.encrypted_files,
+            "PSO2 核验记录版本或数量不匹配"
+        );
+        detail.libraries
+    } else {
+        BTreeMap::new()
+    };
+    Ok((report, transitions))
 }
 
 fn parse_native_so_report(stdout: &str) -> Result<NativeSoTransformReport> {
@@ -474,25 +500,44 @@ pub(crate) fn transform(
     signature: &str,
     profile: ProtectionProfile,
     prefixes: &[String],
+    required: &std::collections::BTreeSet<String>,
+    modules: &BTreeMap<String, String>,
     bridge_class: &str,
     bridge_method: &str,
     cancel: &AtomicBool,
     on_progress: &dyn Fn(String),
-) -> Result<TransformReport> {
+) -> Result<(TransformReport, crate::protection_report::MethodReport)> {
     if !packer.is_file() {
         anyhow::bail!("Xop Packer JAR 不存在: {}", packer.display());
     }
-    if prefixes.is_empty() {
-        anyhow::bail!("融合 PVM2 必须至少提供一个 --xop-true-vmp-prefix，避免无边界虚拟化");
+    if prefixes.is_empty() && required.is_empty() {
+        anyhow::bail!("融合 PVM2 必须提供类前缀或关键方法清单，避免无边界虚拟化");
     }
     for prefix in prefixes {
         validate_prefix(prefix)?;
     }
-    if !crate::dex_packer::route_scanner::any_class_matches_prefixes(apk_dir, prefixes)? {
+    if required.is_empty()
+        && !crate::dex_packer::route_scanner::any_class_matches_prefixes(apk_dir, prefixes)?
+    {
         anyhow::bail!(
             "Xop PVM2 业务类前缀未匹配 APK 中的任何类。请填写应用内真实存在的自有业务包：例如 Java/Kotlin 包 com.acme.app.business 对应 DEX 前缀 Lcom/acme/app/business/；不要照抄界面示例"
         );
     }
+    crate::protect::pvm2_format::verify_report_capability(packer)?;
+    let report_dir = tempfile::tempdir()?;
+    let config_path = report_dir.path().join("config.json");
+    let report_path = report_dir.path().join("methods.json");
+    let config = serde_json::json!({"schema_version": 2, "modules": modules, "required": required});
+    fs::write(&config_path, serde_json::to_vec(&config)?)?;
+    let input_hashes = modules
+        .keys()
+        .map(|name| {
+            Ok((
+                name.clone(),
+                crate::protection_report::file_sha256(&apk_dir.join(name))?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
     let package = package_name(&apk_dir.join("AndroidManifest.xml"))?;
     let code_out = apk_dir.join(crate::dex_packer::XOP_PVM2_SIDECAR_NAME);
     let key = crate::dex_packer::derive_xop_pvm2_key(ikm, signature);
@@ -507,6 +552,10 @@ pub(crate) fn transform(
         .arg("-jar")
         .arg(packer)
         .arg("pvm2-transform")
+        .arg("--report-config")
+        .arg(&config_path)
+        .arg("--report-out")
+        .arg(&report_path)
         .arg("--dex-dir")
         .arg(apk_dir)
         .arg("--code-out")
@@ -541,7 +590,41 @@ pub(crate) fn transform(
     }
     let code = fs::read(&code_out).context("Xop 未生成 PVM2 code.bin")?;
     let transformed = validate_code_bin(&code)?;
-    parse_transform_report(&output.stdout, transformed)
+    let telemetry = parse_transform_report(&output.stdout, transformed)?;
+    let mut detail = crate::protection_report::MethodReport::read(&report_path)?;
+    detail.validate(
+        apk_dir,
+        &code,
+        modules,
+        required,
+        transformed,
+        &input_hashes,
+    )?;
+    let selection = serde_json::json!({"modules": modules, "required": required, "prefixes": prefixes, "profile": profile, "bridge": bridge_descriptor, "bridge_method": bridge_method});
+    detail.build.insert(
+        "config_sha256".into(),
+        crate::protection_report::sha256(&serde_json::to_vec(&selection)?).into(),
+    );
+    detail.build.insert("selection".into(), selection);
+    detail
+        .build
+        .insert("prefixes".into(), serde_json::json!(prefixes));
+    detail.build.insert("profile".into(), profile.into());
+    detail.metrics.insert(
+        "conversion_success_percent".into(),
+        telemetry.success_rate.into(),
+    );
+    detail.build.insert(
+        "packer_sha256".into(),
+        crate::protection_report::file_sha256(packer)?.into(),
+    );
+    let mut jar = ZipArchive::new(fs::File::open(packer)?)?;
+    let provenance: serde_json::Value = serde_json::from_reader(
+        jar.by_name("META-INF/shellsmith-packer-build.json")
+            .context("打包器缺少源码构建信息，请运行 make build-pvm2")?,
+    )?;
+    detail.build.insert("packer_build".into(), provenance);
+    Ok((telemetry, detail))
 }
 
 pub(crate) fn run_ui_command(command: &mut Command, cancel: &AtomicBool) -> Result<()> {
@@ -721,15 +804,29 @@ fn parse_transform_report(stdout: &str, transformed: usize) -> Result<TransformR
     let attempted = required_usize(&admission, "attempted")?;
     let reported_success = required_usize(&admission, "success")?;
     let fallback = required_usize(&admission, "fallback")?;
-    if reported_success != transformed || attempted != reported_success + fallback {
+    if reported_success != transformed
+        || Some(attempted) != reported_success.checked_add(fallback)
+        || candidates < attempted
+    {
         anyhow::bail!(
             "Xop PVM2 报告与 code.bin 不一致: success={reported_success}, payload={transformed}, fallback={fallback}"
         );
     }
-    let success_rate = admission
+    let reported_rate = admission
         .get("rate")
         .and_then(|value| value.trim_end_matches('%').parse::<f64>().ok())
         .context("Xop PVM2 覆盖率格式无效")?;
+    let success_rate = if attempted == 0 {
+        0.0
+    } else {
+        100.0 * reported_success as f64 / attempted as f64
+    };
+    if !reported_rate.is_finite()
+        || !(0.0..=100.0).contains(&reported_rate)
+        || (reported_rate - success_rate).abs() > 0.051
+    {
+        anyhow::bail!("PVM2 百分比与方法计数不一致");
+    }
     let isa = parse_key_values(morph)
         .get("isa")
         .and_then(|value| value.parse::<u8>().ok())
@@ -737,8 +834,20 @@ fn parse_transform_report(stdout: &str, transformed: usize) -> Result<TransformR
         .context("Xop PVM2 ISA 编号无效")?;
     let skip_reasons = parse_key_values(reasons)
         .into_iter()
-        .filter_map(|(key, value)| value.parse::<usize>().ok().map(|count| (key, count)))
-        .collect();
+        .map(|(key, value)| {
+            Ok((
+                key,
+                value.parse::<usize>().context("PVM2 跳过原因计数无效")?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    if skip_reasons
+        .values()
+        .try_fold(0usize, |sum, n| sum.checked_add(*n))
+        != Some(fallback)
+    {
+        anyhow::bail!("PVM2 跳过原因计数与回退总数不一致");
+    }
     let unsupported_opcodes = parse_unsupported_opcodes(unsupported)?;
 
     Ok(TransformReport {
@@ -879,54 +988,71 @@ fn package_name(manifest: &Path) -> Result<String> {
 }
 
 pub(crate) fn validate_code_bin(data: &[u8]) -> Result<usize> {
-    if data.len() < 8 {
-        anyhow::bail!("Xop code.bin 过短");
+    Ok(code_bin_indices(data)?.len())
+}
+
+pub(crate) fn code_bin_indices(data: &[u8]) -> Result<std::collections::BTreeSet<(u32, u32)>> {
+    use std::collections::BTreeSet;
+    fn u32_at(data: &[u8], offset: usize) -> Result<u32> {
+        Ok(u32::from_le_bytes(
+            data.get(offset..offset.checked_add(4).context("code.bin 偏移溢出")?)
+                .context("code.bin 越界")?
+                .try_into()
+                .unwrap(),
+        ))
     }
-    let version = u16::from_le_bytes([data[0], data[1]]);
-    if version != 4 {
-        anyhow::bail!("Xop code.bin 版本不受支持: {version}");
+    if data.len() < 8 || u16::from_le_bytes([data[0], data[1]]) != 4 {
+        anyhow::bail!("Xop code.bin 版本无效或过短");
     }
     let dex_count = u16::from_le_bytes([data[2], data[3]]) as usize;
-    let header_end = 4usize
-        .checked_add(dex_count.checked_mul(4).context("Xop dex_count 溢出")?)
-        .context("Xop header 溢出")?;
-    if dex_count == 0 || header_end > data.len() {
+    let mut cursor = 4 + dex_count * 4;
+    if dex_count == 0 || cursor > data.len() {
         anyhow::bail!("Xop code.bin 不含 PVM2 方法");
     }
-    let mut total = 0usize;
+    let mut indices = BTreeSet::new();
+    let mut dexes = BTreeSet::new();
     for slot in 0..dex_count {
-        let base = 4 + slot * 4;
-        let mut cursor = u32::from_le_bytes(data[base..base + 4].try_into().unwrap()) as usize;
-        if !matches!(cursor.checked_add(6), Some(end) if end <= data.len()) {
-            anyhow::bail!("Xop code.bin dex[{slot}] 越界");
+        if u32_at(data, 4 + slot * 4)? as usize != cursor {
+            anyhow::bail!("code.bin 索引偏移重叠、留空或错序");
         }
-        cursor += 4; // dex_number
-        let methods = u16::from_le_bytes(data[cursor..cursor + 2].try_into().unwrap()) as usize;
-        cursor += 2;
+        let dex = u32_at(data, cursor)?;
+        if !dexes.insert(dex) {
+            anyhow::bail!("code.bin DEX 编号重复");
+        }
+        let methods = u16::from_le_bytes(
+            data.get(cursor + 4..cursor + 6)
+                .context("code.bin DEX 头越界")?
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        if methods == 0 {
+            anyhow::bail!("code.bin 含空 DEX 记录");
+        }
+        cursor += 6;
         for _ in 0..methods {
-            if !matches!(cursor.checked_add(16), Some(end) if end <= data.len()) {
-                anyhow::bail!("Xop code.bin 方法头越界");
+            let method = u32_at(data, cursor)?;
+            let plain_len = u32_at(data, cursor + 4)?;
+            let encrypted_len = u32_at(data, cursor + 8)?;
+            let flags = u32_at(data, cursor + 12)?;
+            if flags != 2 || plain_len < 18 || plain_len.checked_add(28) != Some(encrypted_len) {
+                anyhow::bail!("code.bin 方法 flags 或认证载荷长度无效");
             }
-            let encrypted_len =
-                u32::from_le_bytes(data[cursor + 8..cursor + 12].try_into().unwrap()) as usize;
-            let flags = u32::from_le_bytes(data[cursor + 12..cursor + 16].try_into().unwrap());
-            if flags != 2 {
-                anyhow::bail!("融合载荷只能包含 TRUE_VMP(PVM2)，检测到 flags={flags}");
+            if !indices.insert((dex, method)) {
+                anyhow::bail!("code.bin 方法索引重复");
             }
             cursor = cursor
                 .checked_add(16)
-                .and_then(|value| value.checked_add(encrypted_len))
-                .context("Xop code.bin 方法长度溢出")?;
+                .and_then(|n| n.checked_add(encrypted_len as usize))
+                .context("code.bin 方法长度溢出")?;
             if cursor > data.len() {
-                anyhow::bail!("Xop code.bin 方法载荷越界");
+                anyhow::bail!("code.bin 方法载荷越界");
             }
-            total += 1;
         }
     }
-    if total == 0 {
-        anyhow::bail!("Xop code.bin 不含 PVM2 方法");
+    if cursor != data.len() {
+        anyhow::bail!("code.bin 有未验证尾部数据");
     }
-    Ok(total)
+    Ok(indices)
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -951,10 +1077,10 @@ mod tests {
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&1u16.to_le_bytes());
         data.extend_from_slice(&7u32.to_le_bytes());
-        data.extend_from_slice(&4u32.to_le_bytes());
-        data.extend_from_slice(&28u32.to_le_bytes());
+        data.extend_from_slice(&18u32.to_le_bytes());
+        data.extend_from_slice(&46u32.to_le_bytes());
         data.extend_from_slice(&2u32.to_le_bytes());
-        data.extend_from_slice(&[0u8; 28]);
+        data.extend_from_slice(&[0u8; 46]);
         assert_eq!(validate_code_bin(&data).unwrap(), 1);
         data[26] = 1;
         assert!(validate_code_bin(&data).is_err());
@@ -997,7 +1123,37 @@ mod tests {
         assert_eq!(report.isa, 2);
         assert_eq!(report.skip_reasons["too_many_regs"], 2);
         assert_eq!(report.unsupported_opcodes["0xfc"], 1);
-        assert!((report.success_rate - 81.3).abs() < f64::EPSILON);
+        assert!((report.success_rate - 81.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn 拒绝伪造百分比_非有限值_重复索引和越界载荷() {
+        for rate in ["NaN", "inf", "-1", "100"] {
+            let text = format!("PVM2 admission: candidates=2 attempted=2 success=1 fallback=1 rate={rate}%\nPVM2 skip reasons: other=1\nTRUE_VMP unsupported opcodes (count): {{}}\nPVM2 morph: isa=0\n");
+            assert!(parse_transform_report(&text, 1).is_err());
+        }
+        let mut code = vec![4, 0, 1, 0];
+        for n in [8u32, 0] {
+            code.extend_from_slice(&n.to_le_bytes());
+        }
+        code.extend_from_slice(&2u16.to_le_bytes());
+        for _ in 0..2 {
+            for n in [7u32, 18, 46, 2] {
+                code.extend_from_slice(&n.to_le_bytes());
+            }
+            code.extend_from_slice(&[0; 46]);
+        }
+        assert!(validate_code_bin(&code).is_err());
+        code[76..80].copy_from_slice(&8u32.to_le_bytes());
+        assert_eq!(validate_code_bin(&code).unwrap(), 2);
+        let mut changed = code.clone();
+        changed[4..8].copy_from_slice(&0u32.to_le_bytes());
+        assert!(validate_code_bin(&changed).is_err());
+        let mut changed = code.clone();
+        changed.push(0);
+        assert!(validate_code_bin(&changed).is_err());
+        code.pop();
+        assert!(validate_code_bin(&code).is_err());
     }
 
     #[test]

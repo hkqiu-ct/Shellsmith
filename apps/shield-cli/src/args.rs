@@ -224,6 +224,12 @@ pub struct ProtectAabArgs {
     /// AAB 中要交给嵌入式 PVM2 的类描述符前缀，可重复传入。
     #[arg(long = "xop-true-vmp-prefix")]
     pub xop_true_vmp_prefix: Vec<String>,
+    /// 关键方法清单（UTF-8）：每行 模块名<TAB>完整 DEX 方法描述符。
+    #[arg(long, value_name = "FILE")]
+    pub pvm2_required_methods: Option<PathBuf>,
+    /// Native 证据清单（UTF-8）：模块/lib/ABI/库名.so<TAB>SDK schema 2 报告路径。
+    #[arg(long, value_name = "FILE")]
+    pub native_vmp_evidence: Option<PathBuf>,
     /// `--engine xop` 时使用的 Xop shell-files 目录。
     #[arg(long, value_name = "DIR")]
     pub xop_shell_dir: Option<PathBuf>,
@@ -367,6 +373,12 @@ pub(crate) struct ProtectArgs {
     /// 要交给 Xop PVM2 的 DEX 类型描述符前缀，可重复传入（例如 Lcom/example/pay/）。
     #[arg(long = "xop-true-vmp-prefix")]
     pub xop_true_vmp_prefix: Vec<String>,
+    /// 关键方法清单（UTF-8）：每行 模块名<TAB>完整 DEX 方法描述符。
+    #[arg(long, value_name = "FILE")]
+    pub pvm2_required_methods: Option<PathBuf>,
+    /// Native 证据清单（UTF-8）：模块/lib/ABI/库名.so<TAB>SDK schema 2 报告路径。
+    #[arg(long, value_name = "FILE")]
+    pub native_vmp_evidence: Option<PathBuf>,
     /// 每行输出一个 JSON 事件，兼容原有 --json-progress 参数。
     #[arg(long, alias = "json-progress")]
     pub json: bool,

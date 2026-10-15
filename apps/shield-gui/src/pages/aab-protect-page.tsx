@@ -64,6 +64,8 @@ export function AabProtectPage({
   const [generateApks, setGenerateApks] = useState(true);
   const [runtimeUi, setRuntimeUi] = useState(defaultRuntimeUi);
   const [profile, setProfile] = useState<"balanced" | "strict">("strict");
+  const [pvm2RequiredMethods, setPvm2RequiredMethods] = useState("");
+  const [nativeVmpEvidence, setNativeVmpEvidence] = useState("");
   const [prefixesText, setPrefixesText] = useState("");
   const [currentStep, setCurrentStep] = useState("");
   const [currentDetail, setCurrentDetail] = useState("");
@@ -98,7 +100,7 @@ export function AabProtectPage({
   const locked = state === "running" || state === "prechecking";
   const startDisabled = locked || !runtimeInfoLoaded || !toolsReady || !inspection || !certificate
     || Boolean(filenameError) || !runtimeCertValid || !prefixValid
-    || (profile === "strict" && prefixes.length === 0) || (multiModule && profile !== "strict");
+    || (profile === "strict" && prefixes.length === 0 && !pvm2RequiredMethods.trim()) || (multiModule && profile !== "strict");
 
   const runPreflight = useCallback(async (path: string) => {
     const sequence = ++checkSequence.current;
@@ -138,6 +140,7 @@ export function AabProtectPage({
     setWarning("");
     setError("");
     setPrefixesText("");
+    setPvm2RequiredMethods("");
     setCurrentStep("");
     setCurrentDetail("");
     setStartedAt(null);
@@ -210,6 +213,8 @@ export function AabProtectPage({
         protectionProfile: profile,
         aiResistance: profile === "strict" ? "high" : "balanced",
         xopTrueVmpPrefixes: profile === "strict" ? prefixes : [],
+        pvm2RequiredMethods: profile === "strict" ? pvm2RequiredMethods.trim() || null : null,
+        nativeVmpEvidence: nativeVmpEvidence.trim() || null,
       });
       setFinishedAt(Date.now());
       setState("done");
@@ -233,6 +238,7 @@ export function AabProtectPage({
     setError("");
     setWarning("");
     setPrefixesText("");
+    setPvm2RequiredMethods("");
     setCurrentStep("");
     setStartedAt(null);
     setFinishedAt(null);
@@ -321,9 +327,17 @@ export function AabProtectPage({
                   {profile === "strict" && (
                     <Field label={t(locale, "aabPvmPrefixes")} hint={t(locale, "aabPvmPrefixesHint")}>
                       <TextInput className="font-mono" value={prefixesText} disabled={locked} placeholder="Lcom/acme/app/" onChange={(event) => setPrefixesText(event.target.value)} />
-                      {(!prefixValid || !prefixes.length) && <p className="mt-2 text-xs text-warning">{t(locale, prefixes.length ? "xopPvm2PrefixInvalid" : "xopPvm2StrictRequired")}</p>}
+                      {(!prefixValid || (!prefixes.length && !pvm2RequiredMethods.trim())) && <p className="mt-2 text-xs text-warning">{t(locale, prefixes.length ? "xopPvm2PrefixInvalid" : "xopPvm2StrictRequired")}</p>}
                     </Field>
                   )}
+                  {profile === "strict" && <Field label={t(locale, "pvm2RequiredMethods")} hint={t(locale, "pvm2RequiredMethodsHint")}>
+                    <TextInput value={pvm2RequiredMethods} disabled={locked} onChange={(event) => setPvm2RequiredMethods(event.target.value)} />
+                    <AppButton className="mt-2 w-full" variant="secondary" disabled={locked} onClick={async () => { const path = await openFileDialog("TXT", ["txt", "tsv"]); if (path) setPvm2RequiredMethods(path); }}>{t(locale, "pvm2ChooseMethods")}</AppButton>
+                  </Field>}
+                  <Field label={t(locale, "nativeVmpEvidence")} hint={t(locale, "nativeVmpEvidenceHint")}>
+                    <TextInput aria-label={t(locale, "nativeVmpEvidence")} value={nativeVmpEvidence} disabled={locked} onChange={(event) => setNativeVmpEvidence(event.target.value)} />
+                    <AppButton className="mt-2 w-full" variant="secondary" disabled={locked} onClick={async () => { const path = await openFileDialog("TSV", ["txt", "tsv"]); if (path) setNativeVmpEvidence(path); }}>{t(locale, "nativeVmpChooseEvidence")}</AppButton>
+                  </Field>
                   <Field label={t(locale, "aabRuntimeBinding")}>
                     <CheckRow checked={allowUploadCertBinding} disabled={locked} label={t(locale, "aabLocalUploadBinding")} hint={t(locale, "aabLocalUploadBindingHint")} onChange={setAllowUploadCertBinding} />
                     {!allowUploadCertBinding && <div className="mt-3"><TextInput className="font-mono" value={runtimeCertSha256} disabled={locked} placeholder="AA:BB:…" onChange={(event) => setRuntimeCertSha256(event.target.value)} /><p className="mt-2 text-xs text-muted-foreground">{t(locale, "aabPlayCertificateHint")}</p></div>}

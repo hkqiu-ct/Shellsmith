@@ -82,6 +82,7 @@ export function ProtectPage({
   }
 
   function restoreRecommended() {
+    workflow.setPvm2RequiredMethods("");
     const recommended: ProtectDefaults = {
       runtime_ui: defaultRuntimeUi,
       runtime_mode: "standard",
@@ -119,23 +120,23 @@ export function ProtectPage({
   const hasCustomPvmPacker = Boolean(workflow.xopPvm2PackerPath.trim());
   const hasBundledPvmPacker = Boolean(buildInfo?.xop_pvm2_packer_bundled);
   const hasPvmPacker = hasCustomPvmPacker || hasBundledPvmPacker;
-  const hasPvmPrefixes = workflow.xopTrueVmpPrefixes.length > 0;
+  const hasPvmSelection = workflow.xopTrueVmpPrefixes.length > 0 || Boolean(workflow.pvm2RequiredMethods.trim());
   const pvmPrefixesValid = workflow.xopTrueVmpPrefixes.every((prefix) => prefix.length >= 6 && prefix.startsWith("L") && (prefix.endsWith("/") || prefix.endsWith(";")) && !prefix.includes(".."));
   const pvmJavaReady = (buildInfo?.java_major ?? 0) >= (buildInfo?.xop_pvm2_min_java_major ?? 17);
-  const pvmReady = workflow.runtimeMode === "standard" && hasPvmPacker && hasPvmPrefixes && pvmPrefixesValid && pvmJavaReady;
+  const pvmReady = workflow.runtimeMode === "standard" && hasPvmPacker && hasPvmSelection && pvmPrefixesValid && pvmJavaReady;
   const usingRecommendedProtection = workflow.runtimeMode === "standard"
     && workflow.environmentPolicy === "compatible"
     && workflow.protectionProfile === "balanced"
     && workflow.aiResistance === "balanced"
     && !hasCustomPvmPacker
-    && !hasPvmPrefixes
+    && !hasPvmSelection
     && JSON.stringify(workflow.runtimeUi) === JSON.stringify(defaultRuntimeUi);
-  const pvmConfigurationIncomplete = (hasCustomPvmPacker && !hasPvmPrefixes) || (hasPvmPrefixes && !hasPvmPacker);
+  const pvmConfigurationIncomplete = (hasCustomPvmPacker && !hasPvmSelection) || (hasPvmSelection && !hasPvmPacker);
   const startDisabled = workflow.sharing.pending || !runtimeInfoLoaded || !workflow.preflight || Boolean(workflow.precheck) || workflow.state === "prechecking"
     || workflow.preflight?.verdict === "blocked"
     || Boolean(workflow.outputFilenameError) || (signAfterProtect && !signingCertificate)
     || (workflow.outputDirectoryMode === "fixed" && !workflow.fixedOutputDirectory)
-    || pvmConfigurationIncomplete || (hasPvmPrefixes && (!pvmPrefixesValid || !pvmJavaReady))
+    || pvmConfigurationIncomplete || (hasPvmSelection && (!pvmPrefixesValid || !pvmJavaReady))
     || (workflow.protectionProfile === "strict" && !pvmReady);
   const copyDiagnostic = () => void copy(buildProtectDiagnostic({
     preflight: workflow.preflight,
@@ -217,6 +218,8 @@ export function ProtectPage({
                 protectionProfile={workflow.protectionProfile} aiResistance={workflow.aiResistance}
                 usingRecommendedProtection={usingRecommendedProtection}
                 xopPvm2PackerPath={workflow.xopPvm2PackerPath} xopTrueVmpPrefixesText={workflow.xopTrueVmpPrefixesText} xopTrueVmpPrefixes={workflow.xopTrueVmpPrefixes}
+                pvm2RequiredMethods={workflow.pvm2RequiredMethods} onPvm2RequiredMethodsChange={workflow.setPvm2RequiredMethods}
+                nativeVmpEvidence={workflow.nativeVmpEvidence} onNativeVmpEvidenceChange={workflow.setNativeVmpEvidence}
                 xopPvm2BuiltInAvailable={hasBundledPvmPacker} xopPvm2JavaReady={pvmJavaReady} xopPvm2MinJavaMajor={buildInfo?.xop_pvm2_min_java_major ?? 17}
                 signAfterProtect={signAfterProtect} selectedCertificateId={selectedCertificateId} certificates={certificates}
                 outputDirectoryMode={workflow.outputDirectoryMode} fixedOutputDirectory={workflow.fixedOutputDirectory}

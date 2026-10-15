@@ -117,6 +117,7 @@ public class PackerMain {
     /** Per-APK PVM2 opcode morph (Phase 3); set in protect(). */
     private Pvm2Morph pvm2Morph;
     /** True-VMP compile telemetry (PR6). Does not change admission. */
+    private Pvm2Report methodReport;
     private final Pvm2Admission pvm2Admission = new Pvm2Admission();
     /** Trampoline owner; fused mode points at the host Stub bridge. */
     private String vmBridgeDescriptor = TrueVmpTrampoline.DEFAULT_BRIDGE;
@@ -419,6 +420,8 @@ public class PackerMain {
     private static void runPvm2TransformCli(String[] args) throws Exception {
         File dexDir = null;
         File codeOut = null;
+        File reportConfig = null;
+        File reportOut = null;
         String keyHex = null;
         String packageName = null;
         String bridge = "Ldev/mocika/shield/loader/XopVmBridge;";
@@ -432,6 +435,10 @@ public class PackerMain {
                 dexDir = new File(args[++i]);
             } else if ("--code-out".equals(args[i]) && i + 1 < args.length) {
                 codeOut = new File(args[++i]);
+            } else if ("--report-config".equals(args[i]) && i + 1 < args.length) {
+                reportConfig = new File(args[++i]);
+            } else if ("--report-out".equals(args[i]) && i + 1 < args.length) {
+                reportOut = new File(args[++i]);
             } else if ("--insn-key-hex".equals(args[i]) && i + 1 < args.length) {
                 keyHex = args[++i];
             } else if ("--package-name".equals(args[i]) && i + 1 < args.length) {
@@ -486,19 +493,27 @@ public class PackerMain {
         if (dexFiles.isEmpty()) {
             throw new IllegalStateException("pvm2-transform found no classes*.dex");
         }
+        packer.methodReport = new Pvm2Report(reportConfig);
+        packer.methodReport.inventory(dexFiles, type -> AutoVmpPolicy.matchesRequestedScope(
+                type, packer.paymentAutoVmpEffective, packer.industryAutoVmpEffective,
+                packer.trueVmpPrefixes, packer.protectPolicy.appPackagePrefix()));
         Map<Integer, List<InsnRecord>> all = new HashMap<>();
         for (int dexOrdinal = 0; dexOrdinal < dexFiles.size(); dexOrdinal++) {
             File dex = dexFiles.get(dexOrdinal);
+            packer.methodReport.begin(dex);
             int dexNo = dexNumber(dex.getName());
             File transformed = new File(dex.getParentFile(), dex.getName() + ".pvm2");
             packer.beginPvm2Progress(dexOrdinal + 1, dexFiles.size());
             HollowResult result = packer.hollowDex(dex, transformed, key, dexNo, true);
             Files.move(transformed.toPath(), dex.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            packer.methodReport.verifyDex(dex, dexNo, result.records, bridge, bridgeMethod);
             all.put(dexNo, result.records);
             packer.emitPvm2Progress("complete", true);
         }
         packer.writeCodeBin(codeOut, all);
-        Arrays.fill(key, (byte) 0);
+        try {
+            packer.methodReport.finish(codeOut, key, reportOut != null ? reportOut : new File(codeOut + ".report.json"));
+        } finally { Arrays.fill(key, (byte) 0); }
         int transformed = all.values().stream().mapToInt(List::size).sum();
         System.out.println(packer.pvm2Admission.admissionLine());
         System.out.println(packer.pvm2Admission.skipReasonsLine());
@@ -706,10 +721,13 @@ public class PackerMain {
     /** Selective business-SO transform used by Mocika's host-owned single Stub. */
     private static void runNativeSoTransformCli(String[] args) throws Exception {
         File apkDir = null;
+        File reportOut = null;
         String keyHex = null;
         for (int i = 1; i < args.length; i++) {
             if ("--apk-dir".equals(args[i]) && i + 1 < args.length) {
                 apkDir = new File(args[++i]);
+            } else if ("--report-out".equals(args[i]) && i + 1 < args.length) {
+                reportOut = new File(args[++i]);
             } else if ("--key-hex".equals(args[i]) && i + 1 < args.length) {
                 keyHex = args[++i];
             } else {
@@ -727,6 +745,7 @@ public class PackerMain {
         BusinessSoProtector.Options options = new BusinessSoProtector.Options();
         options.mode = BusinessSoProtector.Mode.SAFE;
         options.functionGranular = true;
+        options.recordEvidence = reportOut != null;
         BusinessSoProtector.ProtectResult result =
                 BusinessSoProtector.protectAll(new File(apkDir, "lib"), options);
         if (!result.entries.isEmpty()) {
@@ -739,6 +758,16 @@ public class PackerMain {
             Arrays.fill(blob, (byte) 0);
         }
         Arrays.fill(key, (byte) 0);
+        if (reportOut != null) {
+            org.json.JSONObject files = new org.json.JSONObject();
+            for (Map.Entry<String, String[]> entry : result.verifiedFiles.entrySet()) {
+                files.put(entry.getKey(), new org.json.JSONObject()
+                        .put("input_sha256", entry.getValue()[0])
+                        .put("output_sha256", entry.getValue()[1]).put("roundtrip_verified", true));
+            }
+            Files.writeString(reportOut.toPath(), new org.json.JSONObject()
+                    .put("schema_version", 1).put("libraries", files).toString(), StandardCharsets.UTF_8);
+        }
         int skipped = result.skippedPolicy.size() + result.skippedReloc.size()
                 + result.skippedBudget.size();
         System.out.println("NATIVE_SO_TRANSFORM_OK encrypted_files=" + result.encrypted.size()
@@ -1910,7 +1939,8 @@ public class PackerMain {
         if (shouldHollow(typeDescriptor)) {
             return true;
         }
-        if (shouldTrueVmp(typeDescriptor) || shouldVmp(typeDescriptor)) {
+        if (shouldTrueVmp(typeDescriptor) || shouldVmp(typeDescriptor)
+                || (methodReport != null && methodReport.requiresType(typeDescriptor))) {
             return true;
         }
         return false;
@@ -2063,13 +2093,15 @@ public class PackerMain {
             return null;
         }
 
-        if (phase == ExtractPhase.TRUE_VMP_ONLY && !shouldTrueVmp(typeDescriptor)) {
+        if (phase == ExtractPhase.TRUE_VMP_ONLY && !shouldTrueVmp(typeDescriptor)
+                && !(methodReport != null && methodReport.requires(key))) {
             return null;
         }
         if (PlaybackCompatibility.keepOnArt(typeDescriptor, methodName)) {
             if (phase == ExtractPhase.TRUE_VMP_ONLY) {
                 pvm2Admission.noteCandidate();
                 pvm2Admission.noteFail("playback compatibility");
+                if (methodReport != null) methodReport.skipped(key, "playback_compatibility");
                 System.out.println("TRUE_VMP skip " + typeDescriptor + "->" + methodName
                         + ": playback compatibility");
             }
@@ -2083,6 +2115,7 @@ public class PackerMain {
         com.android.dex.Code code = dex.readCode(method);
         short[] units = code.getInstructions();
         if (units.length == 0) {
+            if (methodReport != null) methodReport.skipped(key, "empty_code");
             if (phase == ExtractPhase.TRUE_VMP_ONLY) {
                 pvm2Admission.noteCandidate();
             }
@@ -2092,6 +2125,7 @@ public class PackerMain {
         byte[] returnBytes = getReturnByteCodes(returnType);
         int byteSize = units.length * 2;
         if (byteSize < returnBytes.length) {
+            if (methodReport != null) methodReport.skipped(key, "code_too_short");
             if (phase == ExtractPhase.TRUE_VMP_ONLY) {
                 pvm2Admission.noteCandidate();
             }
@@ -2111,9 +2145,11 @@ public class PackerMain {
         if (phase == ExtractPhase.TRUE_VMP_ONLY) {
             pvm2Admission.noteCandidate();
             Pvm2Compiler.Result compiled =
-                    Pvm2Compiler.tryCompile(dex, code, returnType, isStatic, pvm2Morph);
+                    Pvm2Compiler.tryCompile(dex, code, returnType, isStatic, pvm2Morph,
+                            methodReport != null && methodReport.requires(key), paramTypes);
             if (!compiled.isOk()) {
                 pvm2Admission.noteFail(compiled.failReason);
+                if (methodReport != null) methodReport.skipped(key, compiled.failReason);
                 System.out.println("TRUE_VMP skip " + typeDescriptor + "->" + methodName
                         + ": " + compiled.failReason);
                 return null;
@@ -2121,6 +2157,7 @@ public class PackerMain {
             // Stub until DexPool trampoline rewrite replaces the code item.
             writeReturnStub(raf, insnsOffset, returnBytes, byteSize);
             toEncrypt = compiled.image;
+            if (methodReport != null) methodReport.compiled(key, compiled.image);
             plainSize = compiled.image.length;
             flags = VmCodec.FLAG_TRUE_VMP;
             Arrays.fill(original, (byte) 0);

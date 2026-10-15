@@ -23,19 +23,22 @@ final class RuntimeSecurity {
     }
 
     static void checkEnvironment(Context context) {
-        // 壳库完整性先于其余检查：开关关闭时该方法直接返回，不产生额外开销。
         try {
             NativeIntegrity.verify(context);
-        } catch (SecurityException e) {
-            throw e;
-        } catch (Exception e) {
-            Log.e(TAG, "S03", e);
+            MocikaUi.initialize(context);
+            boolean strict = isStrictPolicy(context);
+            Ld.y(strict ? 2 : 1);
+            int signals = Ld.r();
+            reportSuspect(signals);
+            enforceSafe(shouldReject(signals, strict));
+        } catch (Exception error) {
+            block();
+            if (error instanceof SecurityException) throw (SecurityException) error;
+            throw new SecurityException("S03", error);
         }
-        MocikaUi.initialize(context);
-        int signals = Ld.r();
-        reportSuspect(signals);
-        enforceSafe(shouldReject(signals, isStrictPolicy(context)));
     }
+
+    static void block() { Ld.y(0); }
 
     /** 可疑信号写入日志供诊断，不改变启动结果。 */
     private static void reportSuspect(int signals) {
@@ -45,7 +48,7 @@ final class RuntimeSecurity {
     }
 
     static boolean shouldReject(int signals, boolean strict) {
-        return (signals & SIGNAL_ANTI_DEBUG) != 0
+        return (signals & (SIGNAL_ANTI_DEBUG | 8)) != 0
                 || (strict && (signals & SIGNAL_ROOT) != 0);
     }
 

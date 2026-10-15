@@ -32,3 +32,6 @@ void* mocika_xop_pvm2_interpret(void* env, int dex_index, int method_index, void
     (void)args;
     return NULL;
 }
+
+// API 19 不启用 PVM2；Rust 仍维护同一安全策略。
+void mocika_xop_pvm2_block(void) {}

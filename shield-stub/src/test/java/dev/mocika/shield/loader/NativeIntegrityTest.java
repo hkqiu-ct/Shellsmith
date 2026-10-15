@@ -1,102 +1,89 @@
 package dev.mocika.shield.loader;
 
 import org.junit.Test;
-
+import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.nio.charset.StandardCharsets;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import java.security.MessageDigest;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+import static org.junit.Assert.*;
 
 public class NativeIntegrityTest {
-
-    @Test
-    public void 按当前_ABI_取出对应摘要() {
-        String raw = "arm64-v8a:aabb,armeabi-v7a:ccdd";
-        assertEquals("aabb", NativeIntegrity.selectAbiDigest(raw, "arm64-v8a"));
-        assertEquals("ccdd", NativeIntegrity.selectAbiDigest(raw, "armeabi-v7a"));
+    private static byte[] elf(int machine, int bits) {
+        byte[] bytes = new byte[128];
+        bytes[0] = 0x7f; bytes[1] = 'E'; bytes[2] = 'L'; bytes[3] = 'F';
+        bytes[4] = (byte) bits; bytes[5] = 1; bytes[6] = 1; bytes[16] = 3;
+        bytes[18] = (byte) machine; bytes[19] = (byte) (machine >> 8);
+        return bytes;
     }
 
-    @Test
-    public void 缺失字段与未知_ABI_返回_null() {
-        assertNull(NativeIntegrity.selectAbiDigest(null, "arm64-v8a"));
-        assertNull(NativeIntegrity.selectAbiDigest("arm64-v8a:aabb", null));
-        assertNull(NativeIntegrity.selectAbiDigest("arm64-v8a:aabb", "x86_64"));
-        // 空值不应被当作有效摘要
-        assertNull(NativeIntegrity.selectAbiDigest("arm64-v8a:", "arm64-v8a"));
-        // 破损条目跳过而不是抛异常
-        assertNull(NativeIntegrity.selectAbiDigest("nocolon,arm64-v8a:aabb", "x86"));
+    private static String digest(byte[] bytes) throws Exception {
+        StringBuilder text = new StringBuilder();
+        for (byte value : MessageDigest.getInstance("SHA-256").digest(bytes)) text.append(String.format("%02x", value & 255));
+        return text.toString();
     }
 
-    @Test
-    public void 按设备_ABI_优先级选取摘要() {
-        String raw = "arm64-v8a:aabb,armeabi-v7a:ccdd";
-        // 设备支持多种 ABI 时取第一个有摘要的
-        assertEquals("aabb", NativeIntegrity.selectDeviceAbiDigest(
-                raw, new String[]{"arm64-v8a", "armeabi-v7a"}));
-        // 32 位包在 64 位设备上：设备首选 arm64 但包内只有 v7a，
-        // 应回落到 v7a 而不是判定缺失
-        assertEquals("ccdd", NativeIntegrity.selectDeviceAbiDigest(
-                "armeabi-v7a:ccdd", new String[]{"arm64-v8a", "armeabi-v7a", "armeabi"}));
-        // 都不匹配时返回 null 而不是抛异常
-        assertNull(NativeIntegrity.selectDeviceAbiDigest(raw, new String[]{"x86_64"}));
-        assertNull(NativeIntegrity.selectDeviceAbiDigest(null, new String[]{"arm64-v8a"}));
-        assertNull(NativeIntegrity.selectDeviceAbiDigest(raw, null));
-    }
-
-    @Test
-    public void 只识别壳库别名形状的条目() {
-        // 16 位小写字母别名，符合壳库命名
-        assertTrue(NativeIntegrity.isShellLibraryEntry(
-                "lib/arm64-v8a/libmodulecorebridge.so", "lib/arm64-v8a/"));
-        // 业务库保留原名称，长度与字符集都不匹配
-        assertFalse(NativeIntegrity.isShellLibraryEntry(
-                "lib/arm64-v8a/libbusiness.so", "lib/arm64-v8a/"));
-        // 大写字母不符合别名生成规则
-        assertFalse(NativeIntegrity.isShellLibraryEntry(
-                "lib/arm64-v8a/libModuleCorebridge.so", "lib/arm64-v8a/"));
-        // 其他 ABI 与子目录不应命中
-        assertFalse(NativeIntegrity.isShellLibraryEntry(
-                "lib/armeabi-v7a/libmodulecorebridge.so", "lib/arm64-v8a/"));
-        assertFalse(NativeIntegrity.isShellLibraryEntry(
-                "lib/arm64-v8a/sub/libmodulecorebridge.so", "lib/arm64-v8a/"));
-        // 非库文件
-        assertFalse(NativeIntegrity.isShellLibraryEntry(
-                "lib/arm64-v8a/classes.dex", "lib/arm64-v8a/"));
-    }
-
-    @Test
-    public void 解压目录只识别壳库文件名() {
-        assertTrue(NativeIntegrity.isShellLibraryFileName("libmoduleapisupport.so"));
-        assertFalse(NativeIntegrity.isShellLibraryFileName("libbusiness.so"));
-        assertFalse(NativeIntegrity.isShellLibraryFileName("lib/arm64-v8a/libmoduleapisupport.so"));
-        assertFalse(NativeIntegrity.isShellLibraryFileName("libModuleapisupport.so"));
-    }
-
-    @Test
-    public void 解压副本按实际文件字节计算摘要() throws Exception {
-        File directory = Files.createTempDirectory("native-integrity").toFile();
-        try {
-            Files.write(new File(directory, "libmoduleapisupport.so").toPath(),
-                    "payload".getBytes(StandardCharsets.UTF_8));
-            assertEquals("239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5",
-                    NativeIntegrity.hashExtractedShellLibrary(directory.getPath()));
-        } finally {
-            Files.deleteIfExists(new File(directory, "libmoduleapisupport.so").toPath());
-            Files.deleteIfExists(directory.toPath());
+    @Test public void 校验实际ELF架构而非设备首选ABI() throws Exception {
+        byte[] arm = elf(40, 1);
+        String raw = "arm64-v8a:" + digest(elf(183, 2)) + ",armeabi-v7a:" + digest(arm);
+        NativeIntegrity.verifyStream(new ByteArrayInputStream(arm), raw);
+        for (int[] arch : new int[][]{{183, 2}, {40, 1}, {62, 2}, {3, 1}}) {
+            byte[] bytes = elf(arch[0], arch[1]);
+            String abi = arch[0] == 183 ? "arm64-v8a" : arch[0] == 40 ? "armeabi-v7a" : arch[0] == 62 ? "x86_64" : "x86";
+            NativeIntegrity.verifyStream(new ByteArrayInputStream(bytes), abi + ":" + digest(bytes));
         }
+        arm[90] = 1;
+        try { NativeIntegrity.verifyStream(new ByteArrayInputStream(arm), raw); fail(); }
+        catch (SecurityException expected) { assertEquals("N72", expected.getMessage()); }
     }
 
-    @Test
-    public void 解压目录缺少唯一壳库时返回_null() throws Exception {
-        File directory = Files.createTempDirectory("native-integrity-empty").toFile();
+    @Test public void 拒绝截断读取异常与错误摘要字段() throws Exception {
+        byte[] bytes = elf(183, 2);
+        for (String raw : new String[]{null, "", "arm64-v8a:aabb", "x86:" + digest(bytes),
+                "arm64-v8a:" + digest(bytes) + ",arm64-v8a:" + digest(bytes)}) {
+            try { NativeIntegrity.verifyStream(new ByteArrayInputStream(bytes), raw); fail(); }
+            catch (SecurityException expected) { assertEquals("N70", expected.getMessage()); }
+        }
+        try { NativeIntegrity.verifyStream(new ByteArrayInputStream(new byte[19]), null); fail(); }
+        catch (IOException expected) { }
         try {
-            assertNull(NativeIntegrity.hashExtractedShellLibrary(directory.getPath()));
+            NativeIntegrity.verifyStream(new InputStream() {
+                public int read() throws IOException { throw new IOException("读取失败"); }
+            }, "arm64-v8a:" + digest(bytes));
+            fail();
+        } catch (IOException expected) { assertEquals("读取失败", expected.getMessage()); }
+        bytes[5] = 2;
+        try { NativeIntegrity.verifyStream(new ByteArrayInputStream(bytes), "arm64-v8a:" + digest(bytes)); fail(); }
+        catch (SecurityException expected) { assertEquals("N73", expected.getMessage()); }
+    }
+
+    @Test public void 精确校验解压文件及ABI拆分包中的已解析路径() throws Exception {
+        File directory = Files.createTempDirectory("native-integrity").toFile();
+        File so = new File(directory, "libactual.so");
+        File unrelated = new File(directory, "libmoduleapisupport.so");
+        File split = new File(directory, "split_config.arm64_v8a.apk");
+        byte[] bytes = elf(183, 2);
+        String raw = "arm64-v8a:" + digest(bytes);
+        try {
+            Files.write(so.toPath(), bytes);
+            Files.write(unrelated.toPath(), new byte[128]);
+            NativeIntegrity.verifyResolvedLibrary(so.getPath(), raw);
+            try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(split.toPath()))) {
+                zip.putNextEntry(new ZipEntry("lib/arm64-v8a/libactual.so"));
+                zip.write(bytes); zip.closeEntry();
+            }
+            NativeIntegrity.verifyResolvedLibrary(split.getPath() + "!/lib/arm64-v8a/libactual.so", raw);
+            try { NativeIntegrity.verifyResolvedLibrary(split.getPath() + "!/lib/arm64-v8a/libmissing.so", raw); fail(); }
+            catch (SecurityException expected) { assertEquals("N71", expected.getMessage()); }
+            Files.delete(so.toPath());
+            try { NativeIntegrity.verifyResolvedLibrary(so.getPath(), raw); fail(); }
+            catch (IOException expected) { } // 不能回退到 APK 或目录中其他库
         } finally {
-            Files.deleteIfExists(directory.toPath());
+            Files.deleteIfExists(so.toPath()); Files.deleteIfExists(unrelated.toPath());
+            Files.deleteIfExists(split.toPath()); Files.deleteIfExists(directory.toPath());
         }
     }
 }

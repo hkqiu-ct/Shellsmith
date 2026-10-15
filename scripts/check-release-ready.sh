@@ -120,7 +120,12 @@ if [[ -f "tools/apktool_3.0.3.jar" ]]; then
 fi
 expect_sha256 "tools/apktool_3.0.3.jar" "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423"
 expect_sha256 "tools/apksigner.jar" "2defad215d7ff52968a409cde528cdaef7918b115e276b8e3378ca7a178e4180"
-expect_sha256 "tools/xop-pvm2-packer.jar" "41a9fb492ba6b05421f096b84756d781d33cd946f775ed480d5b33410ee25095"
+# 打包器由当前源码重建，JDK 版本会写入构建记录；校验源码、类文件和锁定依赖，不能固定整个 JAR 的摘要。
+if python3 scripts/build_pvm2_packer.py --check; then
+  ok "PVM2 打包器源码、类文件与锁定依赖一致"
+else
+  fail "PVM2 打包器构建记录校验失败"
+fi
 
 info "检查 README 截图引用"
 screenshot_refs=()

@@ -211,6 +211,8 @@ public final class BusinessSoProtector {
         public java.util.Set<String> excludeBasenames = new java.util.LinkedHashSet<>();
         /** Mocika single-Stub mode: encrypt verified ELF function ranges, not all of .text. */
         public boolean functionGranular;
+        /** 输出逐库输入/输出摘要前，必须对落盘密文做完整还原核验。 */
+        public boolean recordEvidence;
     }
 
     /** Normalize user input to {@code libfoo.so} (accepts {@code foo}, {@code libfoo}, {@code libfoo.so}). */
@@ -244,6 +246,7 @@ public final class BusinessSoProtector {
         public long estimatedDeltaBytes;
         public boolean budgetTruncated;
         public int protectedFunctionRegions;
+        public final Map<String, String[]> verifiedFiles = new LinkedHashMap<>();
 
         public ProtectResult(List<Entry> entries) {
             this.entries = entries != null ? entries : new ArrayList<>();
@@ -726,7 +729,8 @@ public final class BusinessSoProtector {
             }
             for (Candidate c : g.files) {
                 if (opts.functionGranular) {
-                    encryptFunctionRanges(c.so, key, c.functionRanges);
+                    String[] evidence = encryptFunctionRanges(c.so, key, c.functionRanges, opts.recordEvidence);
+                    if (evidence != null) result.verifiedFiles.put(c.path(), evidence);
                     result.protectedFunctionRegions += c.functionRanges.size();
                 } else {
                     encryptText(c.so, key);
@@ -1141,17 +1145,40 @@ public final class BusinessSoProtector {
         return merged;
     }
 
-    private static void encryptFunctionRanges(File soFile, byte[] key, List<CodeRange> ranges)
+    private static String[] encryptFunctionRanges(File soFile, byte[] key, List<CodeRange> ranges, boolean verify)
             throws Exception {
         if (ranges == null || ranges.isEmpty()) {
             throw new IllegalStateException("no safe function ranges in " + soFile.getName());
         }
+        String inputHash = null;
+        if (verify) {
+            if (soFile.length() > 512L * 1024 * 1024) throw new IllegalStateException("Native 还原核验超过 512 MiB 预算");
+            byte[] original = java.nio.file.Files.readAllBytes(soFile.toPath());
+            try { inputHash = Pvm2Report.sha256(original); }
+            finally { java.util.Arrays.fill(original, (byte) 0); }
+        }
         for (CodeRange range : ranges) {
             byte[] plain = readAt(soFile, range.offset, range.size);
             byte[] enc = CryptoUtils.rc4Crypt(key, plain);
-            writeAt(soFile, range.offset, enc);
+            try { writeAt(soFile, range.offset, enc); }
+            finally { java.util.Arrays.fill(plain, (byte) 0); java.util.Arrays.fill(enc, (byte) 0); }
         }
         System.out.println("  function-granular regions=" + ranges.size());
+        if (!verify) return null;
+        byte[] restored = java.nio.file.Files.readAllBytes(soFile.toPath());
+        try {
+            String outputHash = Pvm2Report.sha256(restored);
+            // 从落盘 ELF 重新读取范围，避免只证明原先的内存计划能自洽。
+            for (CodeRange range : readFunctionRanges(soFile)) {
+                int start = Math.toIntExact(range.offset);
+                byte[] encrypted = java.util.Arrays.copyOfRange(restored, start, start + range.size);
+                byte[] plain = CryptoUtils.rc4Crypt(key, encrypted);
+                try { System.arraycopy(plain, 0, restored, start, plain.length); }
+                finally { java.util.Arrays.fill(encrypted, (byte) 0); java.util.Arrays.fill(plain, (byte) 0); }
+            }
+            if (!inputHash.equals(Pvm2Report.sha256(restored))) throw new IllegalStateException("PSO2 还原结果与输入库不同");
+            return new String[] {inputHash, outputHash};
+        } finally { java.util.Arrays.fill(restored, (byte) 0); }
     }
 
     private static void writeU16(ByteArrayOutputStream bos, int v) {

@@ -1,6 +1,7 @@
 #include "vm/pvm2_interp.h"
 #include "vm/pvm2_format.h"
 #include "common/runtime_state.h"
+#include "common/secure_memory.h"
 #include "common/log.h"
 #include "common/protector_macro.h"
 #include "crypto/aes.h"
@@ -17,8 +18,62 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#if defined(MOCIKA_PVM2_PROFILE)
+#include <chrono>
+#endif
 
 namespace protector::vm {
+
+#if defined(MOCIKA_PVM2_PROFILE)
+// 仅显式诊断构建启用；不输出方法名、参数、密钥或明文，发布构建不含计时和汇总表。
+struct Pvm2ProfileTimes {
+    uint64_t total = 0, acquire = 0, decrypt = 0, parse = 0, execute = 0, resolve = 0, release = 0;
+};
+struct Pvm2ProfileSum { uint64_t calls = 0; Pvm2ProfileTimes times; };
+static thread_local Pvm2ProfileTimes* g_pvm2_profile = nullptr;
+static std::unordered_map<uint64_t, Pvm2ProfileSum> g_pvm2_profile_sums;
+static std::mutex g_pvm2_profile_mu;
+static uint64_t profile_now() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+struct Pvm2ProfileScope {
+    uint64_t* value;
+    uint64_t start;
+    explicit Pvm2ProfileScope(uint64_t* field) : value(field), start(profile_now()) {}
+    ~Pvm2ProfileScope() { if (value) *value += profile_now() - start; }
+};
+struct Pvm2ProfileCall {
+    Pvm2ProfileTimes times;
+    Pvm2ProfileTimes* previous = g_pvm2_profile;
+    uint64_t key, start = profile_now();
+    Pvm2ProfileCall(int dex, uint32_t method) : key((uint64_t(uint32_t(dex)) << 32) | method) {
+        g_pvm2_profile = &times;
+    }
+    ~Pvm2ProfileCall() {
+        times.total = profile_now() - start;
+        g_pvm2_profile = previous;
+        // ponytail: 诊断表最多 1024 个方法，汇总共用锁；更大范围应分批选择，发布构建不含此路径。
+        std::lock_guard<std::mutex> lock(g_pvm2_profile_mu);
+        if (!g_pvm2_profile_sums.count(key) && g_pvm2_profile_sums.size() >= 1024) return;
+        auto& sum = g_pvm2_profile_sums[key];
+        for (auto field : {&Pvm2ProfileTimes::total, &Pvm2ProfileTimes::acquire,
+                &Pvm2ProfileTimes::decrypt, &Pvm2ProfileTimes::parse, &Pvm2ProfileTimes::execute,
+                &Pvm2ProfileTimes::resolve, &Pvm2ProfileTimes::release}) sum.times.*field += times.*field;
+        if (++sum.calls % 256 != 0) return;
+        const auto& t = sum.times;
+        __android_log_print(ANDROID_LOG_INFO, "MOCIKA_PVM2_PROFILE",
+                "dex=%u method=%u calls=%llu total_ns=%llu acquire_ns=%llu decrypt_ns=%llu parse_ns=%llu execute_ns=%llu resolve_ns=%llu release_ns=%llu",
+                uint32_t(key >> 32), uint32_t(key), (unsigned long long)sum.calls,
+                (unsigned long long)t.total, (unsigned long long)t.acquire, (unsigned long long)t.decrypt,
+                (unsigned long long)t.parse, (unsigned long long)t.execute,
+                (unsigned long long)t.resolve, (unsigned long long)t.release);
+    }
+};
+#define PVM2_PROFILE_STAGE(field) Pvm2ProfileScope profile_##field(g_pvm2_profile ? &g_pvm2_profile->field : nullptr)
+#else
+#define PVM2_PROFILE_STAGE(field)
+#endif
 
 struct Reg {
     int32_t i = 0;
@@ -1124,18 +1179,23 @@ static bool invoke_method(JNIEnv* env, uint8_t op, const std::string& desc,
     std::string owner;
     std::string name;
     std::string sig;
-    if (!parse_member_ref(desc, &owner, &name, &sig)) {
-        return false;
-    }
-    jclass cls = find_class_desc(env, owner);
-    if (cls == nullptr) {
-        return false;
-    }
-    jmethodID mid = (op == OP_INVOKE_STATIC)
-            ? env->GetStaticMethodID(cls, name.c_str(), sig.c_str())
-            : env->GetMethodID(cls, name.c_str(), sig.c_str());
-    if (mid == nullptr) {
-        return false;
+    jclass cls;
+    jmethodID mid;
+    {
+        PVM2_PROFILE_STAGE(resolve);
+        if (!parse_member_ref(desc, &owner, &name, &sig)) {
+            return false;
+        }
+        cls = find_class_desc(env, owner);
+        if (cls == nullptr) {
+            return false;
+        }
+        mid = (op == OP_INVOKE_STATIC)
+                ? env->GetStaticMethodID(cls, name.c_str(), sig.c_str())
+                : env->GetMethodID(cls, name.c_str(), sig.c_str());
+        if (mid == nullptr) {
+            return false;
+        }
     }
 
     const uint8_t* param_regs = arg_regs;
@@ -2058,162 +2118,131 @@ static bool dispatch_exception(JNIEnv* env, const Pvm2Image& img, size_t fault_p
 }
 
 struct VmpLru {
+    // ponytail: 解密、引用计数和淘汰共用锁；执行方法时不持锁，可递归。
+    // 首次解密会串行，若实测冷启动争用再拆分；先避免丢失缓存跟踪与锁顺序反转。
     std::mutex mu;
-    std::list<CodeItem*> order; // front = MRU
+    std::list<CodeItem*> order; // 头部为最近使用项
     std::unordered_map<CodeItem*, std::list<CodeItem*>::iterator> pos;
+    size_t bytes = 0;
+    size_t peak_bytes = 0;
 };
 
 static VmpLru g_vmp_lru;
+static constexpr size_t VMP_CACHE_BYTES = 8 * 1024 * 1024;
 
 static int vmp_lru_cap() {
-    int n = runtime_state().config.vmp_lru;
-    if (n < 1) n = 1;
-    if (n > 256) n = 256;
-    return n;
+    return std::max(1, std::min(256, runtime_state().config.vmp_lru));
 }
 
-static void wipe_vmp_plaintext(CodeItem* item) {
-    if (item == nullptr) return;
-    if (!item->vm_image.empty()) {
-        memset(item->vm_image.data(), 0, item->vm_image.size());
-        item->vm_image.clear();
-        item->vm_image.shrink_to_fit();
-    }
-    item->parsed_vm.reset();
+static size_t plaintext_bytes(const CodeItem* item) {
+    return item->vm_image.capacity()
+            + (item->parsed_vm ? item->parsed_vm->plaintext_bytes() : 0);
 }
 
-static void lru_remove_item(CodeItem* item) {
-    if (item == nullptr) return;
-    std::lock_guard<std::mutex> lock(g_vmp_lru.mu);
-    auto it = g_vmp_lru.pos.find(item);
-    if (it == g_vmp_lru.pos.end()) return;
-    g_vmp_lru.order.erase(it->second);
-    g_vmp_lru.pos.erase(it);
+// 调用者持有缓存锁且确认引用已归零。
+static auto erase_vmp_locked(std::list<CodeItem*>::iterator it) {
+    CodeItem* item = *it;
+    std::lock_guard<std::mutex> parse_lock(item->parse_mu);
+    g_vmp_lru.bytes -= plaintext_bytes(item);
+    item->wipe_plaintext();
+    g_vmp_lru.pos.erase(item);
+    return g_vmp_lru.order.erase(it);
 }
 
-static void lru_touch(CodeItem* item) {
-    if (item == nullptr) return;
-    std::vector<CodeItem*> victims;
-    {
-        std::lock_guard<std::mutex> lock(g_vmp_lru.mu);
-        auto it = g_vmp_lru.pos.find(item);
-        if (it != g_vmp_lru.pos.end()) {
-            g_vmp_lru.order.erase(it->second);
-        }
-        g_vmp_lru.order.push_front(item);
-        g_vmp_lru.pos[item] = g_vmp_lru.order.begin();
-
-        const int cap = vmp_lru_cap();
-        while (static_cast<int>(g_vmp_lru.order.size()) > cap) {
-            CodeItem* victim = nullptr;
-            for (auto rit = g_vmp_lru.order.rbegin(); rit != g_vmp_lru.order.rend(); ++rit) {
-                CodeItem* cand = *rit;
-                if (cand == nullptr || cand == item) continue;
-                if (cand->vmp_in_use.load(std::memory_order_acquire) > 0) continue;
-                victim = cand;
-                break;
-            }
-            if (victim == nullptr) break;
-            auto pos_it = g_vmp_lru.pos.find(victim);
-            if (pos_it != g_vmp_lru.pos.end()) {
-                g_vmp_lru.order.erase(pos_it->second);
-                g_vmp_lru.pos.erase(pos_it);
-            }
-            victims.push_back(victim);
-        }
-    }
-    for (CodeItem* v : victims) {
-        std::lock_guard<std::mutex> plock(v->parse_mu);
-        if (v->vmp_in_use.load(std::memory_order_acquire) > 0) {
-            continue;
-        }
-        wipe_vmp_plaintext(v);
+// 调用者持有缓存锁；使用中的方法留在队列，最后一次归还时重新淘汰。
+static void trim_vmp_locked(bool all) {
+    auto it = g_vmp_lru.order.end();
+    while (it != g_vmp_lru.order.begin()
+            && (all || g_vmp_lru.order.size() > static_cast<size_t>(vmp_lru_cap())
+                    || g_vmp_lru.bytes > VMP_CACHE_BYTES)) {
+        --it;
+        CodeItem* item = *it;
+        if (item->vmp_in_use.load(std::memory_order_acquire) != 0) continue;
+        it = erase_vmp_locked(it);
     }
 }
 
 struct VmpUsePin {
     CodeItem* item = nullptr;
-    void acquire(CodeItem* i) {
-        item = i;
-        item->vmp_in_use.fetch_add(1, std::memory_order_acq_rel);
-    }
     ~VmpUsePin() {
         if (item == nullptr) return;
-        item->vmp_in_use.fetch_sub(1, std::memory_order_acq_rel);
-        if (!runtime_state().environment_degraded.load(std::memory_order_acquire)) {
-            return;
+        PVM2_PROFILE_STAGE(release);
+        std::lock_guard<std::mutex> lock(g_vmp_lru.mu);
+        if (item->vmp_in_use.fetch_sub(1, std::memory_order_acq_rel) == 1
+                && item->parsed_vm->clear_after_use) {
+            erase_vmp_locked(g_vmp_lru.pos.at(item));
         }
-        {
-            std::lock_guard<std::mutex> plock(item->parse_mu);
-            if (item->vmp_in_use.load(std::memory_order_acquire) != 0) {
-                return;
-            }
-            wipe_vmp_plaintext(item);
-        }
-        lru_remove_item(item);
+        trim_vmp_locked(runtime_state().environment_degraded.load(std::memory_order_acquire));
     }
     VmpUsePin() = default;
     VmpUsePin(const VmpUsePin&) = delete;
     VmpUsePin& operator=(const VmpUsePin&) = delete;
 };
 
-/** Caller holds item->parse_mu. Ciphertext at item->insns is left intact. */
+// 调用者持有缓存锁与 parse_mu；密文保持不变，按需重新认证解密。
 static bool ensure_true_vmp_plaintext_locked(CodeItem* item) {
+    if (item->parsed_vm && item->parsed_vm->valid) return true;
     auto& state = runtime_state();
-    if (item->vm_image.empty()) {
-        if (state.config.insns_aes_key.size() != 16) {
-            return false;
-        }
-        if (item->insns == nullptr || item->insns_size == 0 || item->plain_insns_size == 0) {
-            return false;
-        }
-        item->vm_image.resize(item->plain_insns_size);
-        if (!crypto::aes128_gcm_decrypt(state.config.insns_aes_key.data(),
-                                        item->insns, item->insns_size,
-                                        item->vm_image.data(), item->vm_image.size())) {
-            item->vm_image.clear();
-            item->vm_image.shrink_to_fit();
-            return false;
-        }
+    if (state.config.insns_aes_key.size() != 16 || item->insns == nullptr
+            || item->plain_insns_size < 18
+            || static_cast<size_t>(item->insns_size) != item->plain_insns_size + size_t{28}) {
+        item->wipe_plaintext();
+        return false;
     }
-    if (item->parsed_vm == nullptr || !item->parsed_vm->valid) {
-        auto parsed = std::make_unique<Pvm2Image>();
-        if (!parse_pvm2(item->vm_image.data(), item->vm_image.size(), parsed.get())
-                || !parsed->valid) {
-            return false;
-        }
-        item->parsed_vm = std::move(parsed);
+    item->vm_image.resize(item->plain_insns_size);
+    auto parsed = std::make_unique<Pvm2Image>();
+    bool ok;
+    {
+        PVM2_PROFILE_STAGE(decrypt);
+        ok = crypto::aes128_gcm_decrypt(state.config.insns_aes_key.data(),
+                item->insns, item->insns_size, item->vm_image.data(), item->vm_image.size());
     }
+    if (ok) {
+        PVM2_PROFILE_STAGE(parse);
+        ok = parse_pvm2(item->vm_image.data(), item->vm_image.size(), parsed.get());
+    }
+    g_vmp_lru.peak_bytes = std::max(g_vmp_lru.peak_bytes,
+            g_vmp_lru.bytes + item->vm_image.capacity() + parsed->plaintext_bytes());
+    // 解析后的代码与池已自有内存，立即清理重复的原始明文镜像。
+    wipe_vector(item->vm_image);
+    if (!ok) {
+        item->parsed_vm.reset();
+        return false;
+    }
+    item->parsed_vm = std::move(parsed);
+    return true;
+}
+
+static bool acquire_vmp(CodeItem* item, VmpUsePin& pin) {
+    PVM2_PROFILE_STAGE(acquire);
+    std::lock_guard<std::mutex> lock(g_vmp_lru.mu);
+    if (!risk::vmp_allowed()) return false;
+    std::lock_guard<std::mutex> parse_lock(item->parse_mu);
+    if (!ensure_true_vmp_plaintext_locked(item)) return false;
+    pin.item = item;
+    item->vmp_in_use.fetch_add(1, std::memory_order_acq_rel);
+    auto found = g_vmp_lru.pos.find(item);
+    if (found != g_vmp_lru.pos.end()) {
+        g_vmp_lru.order.splice(g_vmp_lru.order.begin(), g_vmp_lru.order, found->second);
+    } else {
+        g_vmp_lru.order.push_front(item);
+        g_vmp_lru.pos.emplace(item, g_vmp_lru.order.begin());
+        g_vmp_lru.bytes += plaintext_bytes(item);
+    }
+    trim_vmp_locked(false);
     return true;
 }
 
 void clear_true_vmp_lru() {
-    std::vector<CodeItem*> wipe_list;
-    std::vector<CodeItem*> pinned;
-    {
-        std::lock_guard<std::mutex> lock(g_vmp_lru.mu);
-        for (CodeItem* item : g_vmp_lru.order) {
-            if (item == nullptr) continue;
-            if (item->vmp_in_use.load(std::memory_order_acquire) > 0) {
-                pinned.push_back(item);
-            } else {
-                wipe_list.push_back(item);
-            }
-        }
-        g_vmp_lru.order.clear();
-        g_vmp_lru.pos.clear();
-        for (CodeItem* p : pinned) {
-            g_vmp_lru.order.push_front(p);
-            g_vmp_lru.pos[p] = g_vmp_lru.order.begin();
-        }
-    }
-    for (CodeItem* v : wipe_list) {
-        std::lock_guard<std::mutex> plock(v->parse_mu);
-        if (v->vmp_in_use.load(std::memory_order_acquire) > 0) {
-            continue;
-        }
-        wipe_vmp_plaintext(v);
-    }
+    std::lock_guard<std::mutex> lock(g_vmp_lru.mu);
+    trim_vmp_locked(true);
+}
+
+VmpCacheStats true_vmp_cache_stats() {
+    std::lock_guard<std::mutex> lock(g_vmp_lru.mu);
+    size_t pins = 0;
+    for (const auto* item : g_vmp_lru.order) pins += item->vmp_in_use.load();
+    return {g_vmp_lru.order.size(), g_vmp_lru.bytes, g_vmp_lru.peak_bytes, pins};
 }
 
 PROTECTOR_ENCRYPT bool prepare_true_vmp_images() {
@@ -2222,9 +2251,7 @@ PROTECTOR_ENCRYPT bool prepare_true_vmp_images() {
         return false;
     }
     risk::so_guard_check();
-    if (state.environment_degraded.load(std::memory_order_acquire)
-            && state.config.rasp_action.load(std::memory_order_relaxed)
-                    == static_cast<int>(RaspAction::Degrade)) {
+    if (state.environment_degraded.load(std::memory_order_acquire)) {
         PLOGE("TRUE_VMP prepare refused: environment degraded");
         return false;
     }
@@ -2267,23 +2294,6 @@ PROTECTOR_ENCRYPT static jobject interpret_body(JNIEnv* env, int dex_index, uint
         return nullptr;
     }
     CodeItem* item = m_it->second;
-    if ((item->flags & FLAG_TRUE_VMP) == 0 || item->vm_image.empty()) {
-        throw_runtime(env, "VMP not ready");
-        return nullptr;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(item->parse_mu);
-        if (item->parsed_vm == nullptr || !item->parsed_vm->valid) {
-            auto parsed = std::make_unique<Pvm2Image>();
-            if (!parse_pvm2(item->vm_image.data(), item->vm_image.size(), parsed.get())
-                    || !parsed->valid) {
-                throw_runtime(env, "VMP bad image");
-                return nullptr;
-            }
-            item->parsed_vm = std::move(parsed);
-        }
-    }
     const Pvm2Image& img = *item->parsed_vm;
 
     std::vector<Reg> regs(img.reg_count);
@@ -2313,6 +2323,11 @@ PROTECTOR_ENCRYPT static jobject interpret_body(JNIEnv* env, int dex_index, uint
     jobject stashed_exception = nullptr;
     InterpFrameScope frame_scope(regs, pending, &stashed_exception);
 
+    const bool typed_arguments = img.version >= PVM2_VERSION_V8;
+    if (typed_arguments && static_cast<size_t>(arg_count) != img.argument_types.size()) {
+        throw_runtime(env, "VMP argument count mismatch");
+        return nullptr;
+    }
     int logical_r = param_base;
     for (int i = 0; i < arg_count; i++) {
         if (logical_r >= static_cast<int>(img.reg_count)) {
@@ -2330,28 +2345,39 @@ PROTECTOR_ENCRYPT static jobject interpret_body(JNIEnv* env, int dex_index, uint
             r = img.reg_map[static_cast<size_t>(logical_r)];
         }
         jobject a = env->GetObjectArrayElement(args, i);
+        const uint8_t declared = typed_arguments ? img.argument_types[i] : 0;
+        if (typed_arguments && declared != 'L') {
+            jclass expected = declared == 'I' ? intCls : declared == 'J' ? longCls
+                : declared == 'Z' ? boolCls : declared == 'F' ? floatCls : doubleCls;
+            if (a == nullptr || !env->IsInstanceOf(a, expected)) {
+                if (a) env->DeleteLocalRef(a);
+                clear_regs(env, regs);
+                throw_runtime(env, "VMP argument type mismatch");
+                return nullptr;
+            }
+        }
         if (a == nullptr) {
             reg_take_o(env, &regs[r], nullptr);
             logical_r += 1;
             continue;
         }
-        if (env->IsInstanceOf(a, intCls)) {
+        if (declared == 'I' || (!typed_arguments && env->IsInstanceOf(a, intCls))) {
             unbox_arg(env, a, "I", &regs[r]);
             env->DeleteLocalRef(a);
             logical_r += 1;
-        } else if (env->IsInstanceOf(a, longCls)) {
+        } else if (declared == 'J' || (!typed_arguments && env->IsInstanceOf(a, longCls))) {
             unbox_arg(env, a, "J", &regs[r]);
             env->DeleteLocalRef(a);
             logical_r += 2;
-        } else if (env->IsInstanceOf(a, boolCls)) {
+        } else if (declared == 'Z' || (!typed_arguments && env->IsInstanceOf(a, boolCls))) {
             unbox_arg(env, a, "Z", &regs[r]);
             env->DeleteLocalRef(a);
             logical_r += 1;
-        } else if (env->IsInstanceOf(a, floatCls)) {
+        } else if (declared == 'F' || (!typed_arguments && env->IsInstanceOf(a, floatCls))) {
             unbox_arg(env, a, "F", &regs[r]);
             env->DeleteLocalRef(a);
             logical_r += 1;
-        } else if (env->IsInstanceOf(a, doubleCls)) {
+        } else if (declared == 'D' || (!typed_arguments && env->IsInstanceOf(a, doubleCls))) {
             unbox_arg(env, a, "D", &regs[r]);
             env->DeleteLocalRef(a);
             logical_r += 2;
@@ -3236,19 +3262,11 @@ PROTECTOR_ENCRYPT static jobject pvm2_run_c(JNIEnv* env, int dex_index, uint32_t
     return interpret_body<2>(env, dex_index, method_idx, args);
 }
 
-static uint8_t peek_isa_id(const std::vector<uint8_t>& image) {
-    if (image.size() < 16) {
-        return 0;
-    }
-    uint16_t ver = static_cast<uint16_t>(image[4] | (image[5] << 8));
-    if (ver < PVM2_VERSION_V3) {
-        return 0;
-    }
-    return image[15];
-}
-
 PROTECTOR_ENCRYPT jobject interpret(JNIEnv* env, int dex_index, uint32_t method_idx,
                                     jobjectArray args) {
+#if defined(MOCIKA_PVM2_PROFILE)
+    Pvm2ProfileCall profile(dex_index, method_idx);
+#endif
     if (!risk::vmp_allowed()) {
         clear_true_vmp_lru();
         throw_security(env, "VMP refused by RASP");
@@ -3268,16 +3286,12 @@ PROTECTOR_ENCRYPT jobject interpret(JNIEnv* env, int dex_index, uint32_t method_
     }
     CodeItem* item = m_it->second;
     VmpUsePin pin;
-    {
-        std::lock_guard<std::mutex> lock(item->parse_mu);
-        if (!ensure_true_vmp_plaintext_locked(item)) {
-            throw_runtime(env, "VMP not ready");
-            return nullptr;
-        }
-        pin.acquire(item);
+    if (!acquire_vmp(item, pin)) {
+        throw_security(env, "VMP unavailable");
+        return nullptr;
     }
-    lru_touch(item);
-    uint8_t isa = peek_isa_id(item->vm_image);
+    uint8_t isa = item->parsed_vm->isa_id;
+    PVM2_PROFILE_STAGE(execute);
     switch (isa % PVM2_ISA_COUNT) {
         case 1:
             return pvm2_run_b(env, dex_index, method_idx, args);

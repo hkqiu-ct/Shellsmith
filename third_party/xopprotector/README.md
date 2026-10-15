@@ -27,8 +27,7 @@ java.lang.RuntimeException: VMP not ready
 | `packer/src/main/java/**` | 打包器 Java 源码。随仓库分发的 `tools/xop-pvm2-packer.jar` 由这套源码构建，放在这里以便查证与比对 |
 | `LICENSE`、`NOTICE` | 上游 Apache-2.0 许可与 NOTICE，与 `tools/licenses/XopProtector-*.txt` 保持一致 |
 
-未包含上游的 Gradle 构建文件与 `packer/libs` 二进制依赖，因此本目录不构成可独立构建的工程；
-重新构建打包器 JAR 仍需上游工程环境。
+未包含上游 Gradle 工程。仓库通过 `make build-pvm2` 使用 JDK 17+ 从全部 Java 源码重建，复用分发 JAR 中由 `dependencies.sha256` 锁定的外部依赖，排除全部自有旧类；`make test-pvm2` 验证源码、类文件、依赖与方法保护链路。
 
 ## 来源与改动声明
 
@@ -38,10 +37,11 @@ java.lang.RuntimeException: VMP not ready
 
 **本目录不是上游基准提交的原样副本**，包含相对该提交的修改，主要差异：
 
-- PVM2 镜像格式升到 v6（`vm/pvm2_format.h`、`vm/pvm2_format.cpp`、`vm/pvm2_interp.cpp`）
+- PVM2 镜像格式升到 v7，增加认证的逐方法明文清理策略；方法报告 schema 为 2
+- 运行时加入可靠明文清零、引用计数与字节预算；必保方法最后一次调用结束立即清理，普通方法使用有限缓存
 - 打包器新增资源、资源 ID、资产与原生库变换子命令（`resource-id-transform`、`res-transform`、
   `assets-transform`、`native-so-transform`）
-- 打包器新增 `Pvm2Safety`、`PlaybackCompatibility`、`AssetCallsiteRewriter`、`ResourceIdRewriter`
+- 打包器新增 `Pvm2Report`、`Pvm2Safety`、`PlaybackCompatibility`、`AssetCallsiteRewriter`、`ResourceIdRewriter`
 
 按 Apache-2.0 第 4(b) 条要求，上述改动在此声明。上游若有更新的修复，可设置
 `MOCIKA_XOP_ROOT` 指向新的 XopProtector 检出以覆盖本目录（例如 `MOCIKA_XOP_ROOT=/path/to/XopProtector`），

@@ -21,13 +21,16 @@ plugin="$(find "${build_root}/pass" -maxdepth 3 -type f \
        -o -name 'MocikaNativeVmpPass.dll' \) -print -quit)"
 test -n "${plugin}"
 
-"${cmake_bin}" -S "${root_dir}/tests/fixture" -B "${build_root}/fixture" \
-    -DCMAKE_C_COMPILER="${clang_bin}" \
+"${cmake_bin}" -S "${root_dir}/tests/fixture" -B "${build_root}/fixture-ninja" -G Ninja \
+    -DCMAKE_CXX_COMPILER="${clangxx_bin}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DMOCIKA_NATIVE_VMP_PLUGIN="${plugin}" \
     -DMOCIKA_NATIVE_VMP_OPT="$(dirname "${llvm_config}")/opt"
-"${cmake_bin}" --build "${build_root}/fixture" --config Release
-"${build_root}/fixture/mocika-native-vmp-fixture"
+"${cmake_bin}" --build "${build_root}/fixture-ninja" --config Release
+"${build_root}/fixture-ninja/mocika-native-vmp-fixture"
+
+python3 "${root_dir}/tests/check-build.py" --plugin "${plugin}" \
+    --llvm-bin "$(dirname "${llvm_config}")"
 
 "${clang_bin}" -O2 -fpass-plugin="${plugin}" \
     -I"${root_dir}/include" -S -emit-llvm \
@@ -45,5 +48,8 @@ grep -q "Mocika Native VMP rejected function 'unsupported_pointer_load'" \
     "${build_root}/unsupported.log"
 
 if command -v strings >/dev/null 2>&1; then
-    strings "${build_root}/fixture/mocika-native-vmp-fixture" | grep -q 'MVMP'
+    strings "${build_root}/fixture-ninja/mocika-native-vmp-fixture" | grep -q 'MVMP'
 fi
+
+python3 "${root_dir}/tests/check-scalars.py" --plugin "${plugin}" \
+    --llvm-bin "$(dirname "${llvm_config}")" --output "${build_root}/scalars"

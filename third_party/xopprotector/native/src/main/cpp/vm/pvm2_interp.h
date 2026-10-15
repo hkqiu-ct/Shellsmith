@@ -2,6 +2,7 @@
 
 #include <jni.h>
 #include <cstdint>
+#include <cstddef>
 
 namespace protector::vm {
 
@@ -20,5 +21,11 @@ bool prepare_true_vmp_images();
 
 /** Wipe decrypted TRUE_VMP images (environment_degraded / re-init). */
 void clear_true_vmp_lru();
+
+// 缓存自有明文存储的保守计数；不包含 JNI 对象、执行栈及分配器开销。
+struct VmpCacheStats {
+    size_t images, bytes, peak_bytes, pins;
+};
+VmpCacheStats true_vmp_cache_stats();
 
 } // namespace protector::vm

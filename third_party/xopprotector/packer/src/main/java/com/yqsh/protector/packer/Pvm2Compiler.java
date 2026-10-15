@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Compiles Dalvik method bodies into PVM2 v6 images (exceptions, arrays, monitors and morphing).
+ * 将 Dalvik 方法编译为 PVM2 v7 镜像，包含异常、数组、同步、多态及认证清理策略。
  */
 public final class Pvm2Compiler {
     private static final int MAX_REGS = 32;
@@ -56,6 +56,16 @@ public final class Pvm2Compiler {
 
     public static Result tryCompile(Dex dex, Code code, String returnType, boolean isStatic,
                                     Pvm2Morph morph) {
+        return tryCompile(dex, code, returnType, isStatic, morph, false);
+    }
+
+    public static Result tryCompile(Dex dex, Code code, String returnType, boolean isStatic,
+                                    Pvm2Morph morph, boolean clearAfterUse) {
+        return tryCompile(dex, code, returnType, isStatic, morph, clearAfterUse, new String[0]);
+    }
+
+    public static Result tryCompile(Dex dex, Code code, String returnType, boolean isStatic,
+                                    Pvm2Morph morph, boolean clearAfterUse, String[] parameterTypes) {
         if (code == null) return Result.fail("no code");
         if (code.getRegistersSize() > MAX_REGS) return Result.fail("too many regs");
         short[] units = code.getInstructions();
@@ -64,6 +74,21 @@ public final class Pvm2Compiler {
 
         int retKind = retKindOf(returnType);
         if (retKind < 0) return Result.fail("unsupported return " + returnType);
+
+        if (parameterTypes == null) return Result.fail("argument types required");
+        byte[] arguments = new byte[parameterTypes.length + (isStatic ? 0 : 1)];
+        int argumentIndex = 0, argumentSlots = isStatic ? 0 : 1;
+        if (!isStatic) arguments[argumentIndex++] = 'L';
+        for (String parameter : parameterTypes) {
+            if (parameter == null || parameter.isEmpty()) return Result.fail("invalid argument type");
+            char kind = parameter.charAt(0);
+            if (kind == '[' || kind == 'L') kind = 'L';
+            else if (parameter.length() != 1 || "ZBSCIJFD".indexOf(kind) < 0) return Result.fail("invalid argument type");
+            argumentSlots += kind == 'J' || kind == 'D' ? 2 : 1;
+            if (kind == 'B' || kind == 'S' || kind == 'C') kind = 'I';
+            arguments[argumentIndex++] = (byte)kind;
+        }
+        if (arguments.length > 255 || argumentSlots != code.getInsSize()) return Result.fail("argument types do not match register frame");
 
         String safetyFailure = Pvm2Safety.check(code, isStatic);
         if (safetyFailure != null) return Result.fail(safetyFailure);
@@ -142,7 +167,7 @@ public final class Pvm2Compiler {
             byte[] registerMap = morph.registerMap(totalRegs);
             morph.morphCodeInPlace(codeBytes, registerMap);
             return Result.ok(buildImageV3(totalRegs, extra, code.getInsSize(), retKind, morph,
-                    registerMap, strings, methodPool, fieldPool, typePool, handlers, codeBytes));
+                    registerMap, strings, methodPool, fieldPool, typePool, handlers, codeBytes, clearAfterUse, arguments));
         } catch (IOException e) {
             return Result.fail(e.getMessage());
         } catch (RuntimeException e) {
@@ -1382,7 +1407,7 @@ public final class Pvm2Compiler {
                                        List<Integer> fieldPool,
                                        List<Integer> typePool,
                                        List<Handler> handlers,
-                                       byte[] code) throws IOException {
+                                       byte[] code, boolean clearAfterUse, byte[] arguments) throws IOException {
         // Fix handler end offsets that used sentinel
         for (Handler h : handlers) {
             if (h.end < 0) {
@@ -1403,6 +1428,8 @@ public final class Pvm2Compiler {
         out.writeByte(retKind);
         out.writeByte(morph.isaId & 0xff);
         writeU16(out, strings.size());
+        // v7：清理策略随镜像一起认证，不能由外部报告或未认证标志覆盖。
+        out.writeByte(clearAfterUse ? 1 : 0);
         for (String s : strings) {
             byte[] utf = s.getBytes(StandardCharsets.UTF_8);
             if (utf.length > 0xffff) throw new IOException("string too long");
@@ -1427,6 +1454,9 @@ public final class Pvm2Compiler {
         }
         out.writeByte(registerMap.length);
         out.write(registerMap);
+        // v8：按声明类型解包参数，Object/Number 等引用不能按运行时包装类误拆箱。
+        out.writeByte(arguments.length);
+        out.write(arguments);
         for (int priority : morph.handlerOrder(handlers.size())) {
             Handler h = handlers.get(priority);
             writeU16(out, h.start);

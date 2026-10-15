@@ -74,13 +74,18 @@ fn unsupported_api19_abis(native_abis: &[String]) -> Vec<String> {
 fn resolve_xop_pvm2_packer(
     custom: Option<String>,
     prefixes: &[String],
+    required: bool,
     built_in: Option<PathBuf>,
 ) -> Option<PathBuf> {
     custom
         .filter(|path| !path.trim().is_empty())
         .map(PathBuf::from)
         .map(strip_unc_prefix)
-        .or_else(|| (!prefixes.is_empty()).then_some(built_in).flatten())
+        .or_else(|| {
+            (!prefixes.is_empty() || required)
+                .then_some(built_in)
+                .flatten()
+        })
 }
 
 pub(crate) struct ProtectExecution {
@@ -96,6 +101,8 @@ pub(crate) struct ProtectExecution {
     pub(crate) ai_resistance: AiResistanceRequest,
     pub(crate) xop_pvm2_packer_path: Option<String>,
     pub(crate) xop_true_vmp_prefixes: Vec<String>,
+    pub(crate) pvm2_required_methods: Option<String>,
+    pub(crate) native_vmp_evidence: Option<String>,
     pub(crate) signing_certificate: Option<CertificateRecord>,
     pub(crate) signed_output: Option<String>,
 }
@@ -142,6 +149,7 @@ pub(crate) async fn execute_protect_apk(
     let resolved_xop_pvm2_packer = resolve_xop_pvm2_packer(
         request.xop_pvm2_packer_path.clone(),
         &request.xop_true_vmp_prefixes,
+        request.pvm2_required_methods.is_some(),
         find_xop_pvm2_packer_path(&app),
     );
 
@@ -194,6 +202,14 @@ pub(crate) async fn execute_protect_apk(
             },
             xop_pvm2_packer_path: resolved_xop_pvm2_packer,
             xop_true_vmp_prefixes: request.xop_true_vmp_prefixes,
+            pvm2_required_methods: request
+                .pvm2_required_methods
+                .map(PathBuf::from)
+                .map(strip_unc_prefix),
+            native_vmp_evidence: request
+                .native_vmp_evidence
+                .map(PathBuf::from)
+                .map(strip_unc_prefix),
             external_pvm2_dex_dir: None,
             external_pas2_assets_dir: None,
             deferred_pas2_asset_modules: Vec::new(),
@@ -255,6 +271,7 @@ pub(crate) async fn execute_protect_apk(
                     task_manager.progress(&progress_window, &progress_task_id, step, message)
                 },
             )?;
+            let _ = std::fs::remove_file(shield_core::protection_report::report_path(&opts.output));
             let _ = std::fs::remove_file(format!("{final_output}.idsig"));
             let _ = std::fs::remove_file(unsigned_output);
             task_manager.progress(
@@ -290,11 +307,16 @@ mod pvm2_tests {
     fn built_in_packer_is_used_only_when_pvm2_prefixes_are_selected() {
         let built_in = PathBuf::from("built-in.jar");
         assert_eq!(
-            resolve_xop_pvm2_packer(None, &["Lcom/example/".into()], Some(built_in.clone())),
+            resolve_xop_pvm2_packer(
+                None,
+                &["Lcom/example/".into()],
+                false,
+                Some(built_in.clone())
+            ),
             Some(built_in)
         );
         assert_eq!(
-            resolve_xop_pvm2_packer(None, &[], Some(PathBuf::from("built-in.jar"))),
+            resolve_xop_pvm2_packer(None, &[], false, Some(PathBuf::from("built-in.jar"))),
             None
         );
     }
@@ -305,6 +327,7 @@ mod pvm2_tests {
             resolve_xop_pvm2_packer(
                 Some("custom.jar".into()),
                 &["Lcom/example/".into()],
+                false,
                 Some(PathBuf::from("built-in.jar")),
             ),
             Some(PathBuf::from("custom.jar"))

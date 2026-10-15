@@ -94,6 +94,12 @@ jobs:
       - name: 检查 Rust 格式
         run: cargo fmt --all --check
 
+      - name: 从源码重建并验证 PVM2 方法保护
+        run: make test-pvm2
+
+      - name: 检查 PVM2 运行时并发与明文生命周期
+        run: make test-pvm2-runtime
+
       - name: 运行融合核心测试
         run: make test-fusion
 

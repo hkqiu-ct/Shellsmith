@@ -1,5 +1,5 @@
 import { RuntimeUiSettings } from "@/components/app/runtime-ui-settings";
-import type { RuntimeUiProtection } from "@/lib/tauri";
+import { openFileDialog, type RuntimeUiProtection } from "@/lib/tauri";
 import { FolderKey, FolderOpen, Play, Settings2 } from "lucide-react";
 import { AppButton, SelectInput, TextInput } from "@/components/app/common";
 import {
@@ -27,6 +27,8 @@ export function ProtectConfigurationPanel({
   aiResistance,
   usingRecommendedProtection,
   xopPvm2PackerPath,
+  pvm2RequiredMethods, onPvm2RequiredMethodsChange,
+  nativeVmpEvidence, onNativeVmpEvidenceChange,
   xopTrueVmpPrefixesText,
   xopTrueVmpPrefixes,
   xopPvm2BuiltInAvailable,
@@ -66,6 +68,10 @@ export function ProtectConfigurationPanel({
   aiResistance: AiResistance;
   usingRecommendedProtection: boolean;
   xopPvm2PackerPath: string;
+  nativeVmpEvidence: string;
+  onNativeVmpEvidenceChange: (value: string) => void;
+  pvm2RequiredMethods: string;
+  onPvm2RequiredMethodsChange: (value: string) => void;
   xopTrueVmpPrefixesText: string;
   xopTrueVmpPrefixes: string[];
   xopPvm2BuiltInAvailable: boolean;
@@ -95,7 +101,7 @@ export function ProtectConfigurationPanel({
   const invalidPvmPrefix = xopTrueVmpPrefixes.some((prefix) => prefix.length < 6 || !prefix.startsWith("L") || (!prefix.endsWith("/") && !prefix.endsWith(";")) || prefix.includes(".."));
   const customPvmPacker = Boolean(xopPvm2PackerPath.trim());
   const pvmPackerAvailable = customPvmPacker || xopPvm2BuiltInAvailable;
-  const pvmReady = pvmPackerAvailable && xopTrueVmpPrefixes.length > 0 && !invalidPvmPrefix && xopPvm2JavaReady && runtimeMode === "standard";
+  const pvmReady = pvmPackerAvailable && (xopTrueVmpPrefixes.length > 0 || Boolean(pvm2RequiredMethods.trim())) && !invalidPvmPrefix && xopPvm2JavaReady && runtimeMode === "standard";
   return (
     <aside className="rounded-[14px] border bg-card p-5">
       <div className="flex items-center justify-between gap-3">
@@ -157,10 +163,20 @@ export function ProtectConfigurationPanel({
                   onChange={(event) => onXopTrueVmpPrefixesTextChange(event.target.value)}
                 />
                 <p className="mt-2 text-xs leading-5 text-muted-foreground">{t(locale, "xopTrueVmpPrefixesHint")}</p>
+                <label className="field-label mt-4 block" htmlFor="pvm2-required-methods">{t(locale, "pvm2RequiredMethods")}</label>
+                <TextInput id="pvm2-required-methods" className="mt-2" value={pvm2RequiredMethods} disabled={disabled} onChange={(event) => onPvm2RequiredMethodsChange(event.target.value)} />
+                <AppButton className="mt-2 w-full" variant="secondary" disabled={disabled} onClick={async () => { const path = await openFileDialog("TXT", ["txt", "tsv"]); if (path) onPvm2RequiredMethodsChange(path); }}><FolderOpen className="h-4 w-4" />{t(locale, "pvm2ChooseMethods")}</AppButton>
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">{t(locale, "pvm2RequiredMethodsHint")}</p>
                 {invalidPvmPrefix && <p className="mt-2 text-xs leading-5 text-warning">{t(locale, "xopPvm2PrefixInvalid")}</p>}
-                {!xopPvm2JavaReady && xopTrueVmpPrefixes.length > 0 && <p className="mt-2 text-xs leading-5 text-warning">{tf(locale, "xopPvm2JavaRequired", { min: xopPvm2MinJavaMajor })}</p>}
+                {!xopPvm2JavaReady && (xopTrueVmpPrefixes.length > 0 || Boolean(pvm2RequiredMethods.trim())) && <p className="mt-2 text-xs leading-5 text-warning">{tf(locale, "xopPvm2JavaRequired", { min: xopPvm2MinJavaMajor })}</p>}
                 {runtimeMode === "android_api19" && <p className="mt-2 text-xs leading-5 text-warning">{t(locale, "xopPvm2Api19Unavailable")}</p>}
-                {runtimeMode === "standard" && protectionProfile === "strict" && (!pvmPackerAvailable || xopTrueVmpPrefixes.length === 0) && <p className="mt-2 text-xs leading-5 text-warning">{t(locale, "xopPvm2StrictRequired")}</p>}
+                {runtimeMode === "standard" && protectionProfile === "strict" && (!pvmPackerAvailable || (xopTrueVmpPrefixes.length === 0 && !pvm2RequiredMethods.trim())) && <p className="mt-2 text-xs leading-5 text-warning">{t(locale, "xopPvm2StrictRequired")}</p>}
+              </div>
+              <div className="rounded-xl border p-4">
+                <label className="field-label block" htmlFor="native-vmp-evidence">{t(locale, "nativeVmpEvidence")}</label>
+                <TextInput id="native-vmp-evidence" className="mt-2" value={nativeVmpEvidence} disabled={disabled} onChange={(event) => onNativeVmpEvidenceChange(event.target.value)} />
+                <AppButton className="mt-2 w-full" variant="secondary" disabled={disabled} onClick={async () => { const path = await openFileDialog("TSV", ["txt", "tsv"]); if (path) onNativeVmpEvidenceChange(path); }}><FolderOpen className="h-4 w-4" />{t(locale, "nativeVmpChooseEvidence")}</AppButton>
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">{t(locale, "nativeVmpEvidenceHint")}</p>
               </div>
               <div className="rounded-xl border p-4">
                 <label className="flex items-center justify-between gap-4 text-sm font-medium">

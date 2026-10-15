@@ -173,6 +173,10 @@ jobs:
         shell: bash
         run: bash scripts/bump-version.sh "$VERSION"
 
+      - name: 从源码重建 PVM2 打包器
+        shell: bash
+        run: python3 scripts/build_pvm2_packer.py
+
       # 打包器 JAR 与运行时源码现在都在本仓库内（third_party/xopprotector），
       # 因此这里恢复为硬性闸门：两侧格式版本不一致就直接失败，不再放行。
       - name: 校验 PVM2 打包器与运行时格式版本一致

@@ -1,5 +1,4 @@
 use colored::Colorize;
-use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,6 +84,10 @@ pub struct ProtectOptions {
     pub xop_pvm2_packer_path: Option<PathBuf>,
     /// 明确允许虚拟化的 DEX 类型描述符前缀。
     pub xop_true_vmp_prefixes: Vec<String>,
+    /// UTF-8 关键方法清单：模块名、制表符、完整 DEX 方法描述符。
+    pub pvm2_required_methods: Option<PathBuf>,
+    /// Native 证据清单：模块/lib/ABI/库名.so、制表符、SDK 构建报告路径。
+    pub native_vmp_evidence: Option<PathBuf>,
     /// AAB dynamic-feature DEX staging root. Files use the same PVM2 key and
     /// global DEX index space, then are written back before base DEX packing.
     pub external_pvm2_dex_dir: Option<PathBuf>,
@@ -145,10 +148,66 @@ pub fn protect_apk(
     on_progress: impl Fn(ProgressEvent) + Send + 'static,
     cancel: Arc<AtomicBool>,
 ) -> std::result::Result<(), ShieldError> {
+    let parent = opts
+        .output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let staged = tempfile::Builder::new()
+        .prefix("shield-output-")
+        .suffix(".apk")
+        .tempfile_in(parent)
+        .map_err(anyhow::Error::from)
+        .map_err(ShieldError::from)?;
+    let mut working = opts.clone();
+    working.output = staged.path().to_owned();
+    let report = protect_apk_inner(&working, on_progress, cancel)?;
+    let has_report = report.is_some();
+    if let Some(report) = report {
+        report
+            .write(&crate::protection_report::report_path(&opts.output))
+            .map_err(ShieldError::from)?;
+    } else {
+        let obsolete = crate::protection_report::report_path(&opts.output);
+        if obsolete.exists() {
+            fs::remove_file(obsolete)
+                .map_err(anyhow::Error::from)
+                .map_err(ShieldError::from)?;
+        }
+    }
+    staged
+        .persist(&opts.output)
+        .map_err(|e| ShieldError::from(anyhow::Error::from(e.error)))?;
+    if has_report {
+        print_success(&format!(
+            "代码保护报告：{}",
+            crate::protection_report::report_path(&opts.output).display()
+        ));
+    }
+    Ok(())
+}
+
+fn protect_apk_inner(
+    opts: &ProtectOptions,
+    on_progress: impl Fn(ProgressEvent) + Send + 'static,
+    cancel: Arc<AtomicBool>,
+) -> std::result::Result<Option<crate::protection_report::MethodReport>, ShieldError> {
+    let required =
+        crate::protection_report::required_methods(opts.pvm2_required_methods.as_deref())
+            .map_err(ShieldError::from)?;
     opts.runtime_ui.validate().map_err(ShieldError::from)?;
     if !opts.input.exists() {
         return Err(ShieldError::FileNotFound(opts.input.display().to_string()));
     }
+    crate::protection_report::checked_archive(&opts.input).map_err(ShieldError::from)?;
+    let mut native_records = crate::native_vmp::load_evidence(
+        opts.native_vmp_evidence.as_deref(),
+        &opts.input,
+        opts.external_native_lib_dir.as_deref(),
+        &opts.excluded_abis,
+    )
+    .map_err(ShieldError::from)?;
+    let mut native_transitions = std::collections::BTreeMap::new();
 
     let apktool = match &opts.apktool_path {
         Some(p) if p.exists() => p.clone(),
@@ -227,9 +286,12 @@ pub fn protect_apk(
             "严格保护需要声明 native_so_functions=true 的新版 Runtime 资源包"
         )));
     }
-    if opts.xop_pvm2_packer_path.is_some() && opts.xop_true_vmp_prefixes.is_empty() {
+    if opts.xop_pvm2_packer_path.is_some()
+        && opts.xop_true_vmp_prefixes.is_empty()
+        && required.is_empty()
+    {
         return Err(ShieldError::from(anyhow::anyhow!(
-            "融合 PVM2 必须至少提供一个 xop_true_vmp_prefixes，避免无边界虚拟化"
+            "融合 PVM2 必须提供业务类前缀或关键方法清单，避免无边界虚拟化"
         )));
     }
     let policy = ProtectionPolicy::for_profile(opts.protection_profile, opts.ai_resistance);
@@ -249,7 +311,6 @@ pub fn protect_apk(
         println!("{}", "Shellsmith · APK Protection".cyan().bold());
         println!("{}", "========================================".cyan());
         println!("输入APK: {:?}", opts.input);
-        println!("输出APK: {:?}", opts.output);
         println!(
             "保护策略: profile={} ai_resistance={}",
             policy.profile.as_str(),
@@ -399,8 +460,25 @@ pub fn protect_apk(
         "处理DEX文件",
     )?;
 
-    let mut ikm = [0u8; 32];
-    rand::rng().fill_bytes(&mut ikm);
+    let package =
+        crate::protect::manifest::read_package_name(&apk_dir).map_err(ShieldError::from)?;
+    let (ikm, project_identity, project_build_salt) = crate::project_protection::build_material(
+        &crate::project_protection::default_directory().map_err(ShieldError::from)?,
+        &package,
+        &signature,
+    )
+    .map_err(ShieldError::from)?;
+    emit_progress(
+        &on_progress,
+        &cancel,
+        ProgressStep::ProcessDex,
+        &format!(
+            "自动使用项目保护身份：{}（{}）；本机保存，手机安装即用",
+            package,
+            &project_identity.id[..12]
+        ),
+    )?;
+    let mut method_report = None;
 
     if let Some(packer) = opts.xop_pvm2_packer_path.as_deref() {
         let staged_external_assets = stage_external_pas2_assets(
@@ -463,10 +541,16 @@ pub fn protect_apk(
                 assets.skipped_dexopt,
                 assets.callsites
             ));
-            let native = crate::protect::xop_pvm2::transform_native_sos(
-                &java, packer, &apk_dir, &ikm, &signature,
+            let (native, transitions) = crate::protect::xop_pvm2::transform_native_sos(
+                &java,
+                packer,
+                &apk_dir,
+                &ikm,
+                &signature,
+                !native_records.is_empty(),
             )
             .map_err(ShieldError::from)?;
+            native_transitions = transitions;
             restore_external_native_libraries(&staged_external_native)
                 .map_err(ShieldError::from)?;
             print_success(&format!(
@@ -488,7 +572,44 @@ pub fn protect_apk(
                 stage_external_pvm2_dexes(&apk_dir, opts.external_pvm2_dex_dir.as_deref())
                     .map_err(ShieldError::from)?;
         }
-        let report = crate::protect::xop_pvm2::transform(
+        let mut modules = std::collections::BTreeMap::new();
+        for entry in fs::read_dir(&apk_dir)
+            .map_err(anyhow::Error::from)
+            .map_err(ShieldError::from)?
+        {
+            let entry = entry
+                .map_err(anyhow::Error::from)
+                .map_err(ShieldError::from)?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if dex_number(&name).is_some() {
+                modules.insert(name, "base".to_string());
+            }
+        }
+        let mut external_names = std::collections::BTreeMap::new();
+        for item in &staged_external {
+            let root = opts.external_pvm2_dex_dir.as_ref().unwrap();
+            let relative = item
+                .original
+                .strip_prefix(root)
+                .map_err(anyhow::Error::from)
+                .map_err(ShieldError::from)?;
+            let module = relative
+                .components()
+                .next()
+                .unwrap()
+                .as_os_str()
+                .to_string_lossy()
+                .into_owned();
+            let staged_name = item
+                .staged
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            modules.insert(staged_name.clone(), module);
+            external_names.insert(staged_name, relative.to_string_lossy().replace('\\', "/"));
+        }
+        let (report, mut detail) = crate::protect::xop_pvm2::transform(
             &java,
             packer,
             &apk_dir,
@@ -496,6 +617,8 @@ pub fn protect_apk(
             &signature,
             opts.protection_profile,
             &opts.xop_true_vmp_prefixes,
+            &required,
+            &modules,
             runtime_selection.xop_vm_bridge.as_deref().ok_or_else(|| {
                 ShieldError::from(anyhow::anyhow!("Runtime 缺少 Xop VM 桥类元数据"))
             })?,
@@ -520,9 +643,29 @@ pub fn protect_apk(
                 ShieldError::from(error)
             }
         })?;
+        for (staged, target) in external_names {
+            detail.artifact_dexes.insert(
+                target,
+                crate::protection_report::file_sha256(&apk_dir.join(staged))
+                    .map_err(ShieldError::from)?,
+            );
+        }
+        detail.build.insert(
+            "input_sha256".into(),
+            crate::protection_report::file_sha256(&opts.input)
+                .map_err(ShieldError::from)?
+                .into(),
+        );
+        detail.build.insert(
+            "runtime_sha256".into(),
+            crate::protection_report::file_sha256(&runtime_resources)
+                .map_err(ShieldError::from)?
+                .into(),
+        );
+        method_report = Some(detail);
         restore_external_pvm2_dexes(&staged_external).map_err(ShieldError::from)?;
         print_success(&format!(
-            "Xop PVM2 覆盖报告：选中 {}，尝试 {}，成功 {}，跳过 {}，覆盖率 {:.1}%，ISA {}",
+            "Xop PVM2 编译统计：候选 {}，尝试 {}，成功 {}，回退 {}，转换成功率 {:.1}%，ISA {}",
             report.candidates,
             report.attempted,
             report.transformed,
@@ -551,9 +694,9 @@ pub fn protect_apk(
         }
         enforce_pvm2_coverage(opts.protection_profile, &report).map_err(ShieldError::from)?;
         add_xop_pvm2_marker(&apk_dir).map_err(ShieldError::from)?;
-    } else if !opts.xop_true_vmp_prefixes.is_empty() {
+    } else if !opts.xop_true_vmp_prefixes.is_empty() || !required.is_empty() {
         return Err(ShieldError::from(anyhow::anyhow!(
-            "已提供 Xop TRUE_VMP 前缀，但缺少 xop_pvm2_packer_path"
+            "已提供 PVM2 类前缀或关键方法清单，但缺少 xop_pvm2_packer_path"
         )));
     }
 
@@ -587,6 +730,79 @@ pub fn protect_apk(
     .map_err(|err| diagnosed(err, FailureCode::RuntimeInjectionFailed))?;
     add_native_integrity(&apk_dir, &injected_runtime.shell_digests).map_err(ShieldError::from)?;
     print_success("Runtime库注入完成");
+    if !native_records.is_empty() {
+        crate::native_vmp::capture_outputs(
+            &mut native_records,
+            &apk_dir,
+            opts.external_native_lib_dir.as_deref(),
+            &native_transitions,
+        )
+        .map_err(ShieldError::from)?;
+        let functions: usize = native_records.iter().map(|row| row.function_count()).sum();
+        let message = format!(
+            "Native VMP 构建证据已核验：{} 个库、{functions} 个函数；设备执行仍需单独验收",
+            native_records.len()
+        );
+        emit_progress(&on_progress, &cancel, ProgressStep::InjectRuntime, &message)?;
+        print_success(&message);
+        let detail =
+            method_report.get_or_insert_with(crate::protection_report::MethodReport::native_only);
+        detail.native_vmp = native_records;
+        detail.build.insert(
+            "input_sha256".into(),
+            crate::protection_report::file_sha256(&opts.input)
+                .map_err(ShieldError::from)?
+                .into(),
+        );
+        detail.build.insert(
+            "runtime_sha256".into(),
+            crate::protection_report::file_sha256(&runtime_resources)
+                .map_err(ShieldError::from)?
+                .into(),
+        );
+    }
+    let identity_report =
+        method_report.get_or_insert_with(crate::protection_report::MethodReport::native_only);
+    identity_report.build.insert(
+        "project_identity".into(),
+        serde_json::to_value(&project_identity)
+            .map_err(anyhow::Error::from)
+            .map_err(ShieldError::from)?,
+    );
+    identity_report
+        .build
+        .insert("project_build_salt".into(), project_build_salt.into());
+    identity_report.build.insert(
+        "key_delivery".into(),
+        "install_and_run_public_recovery_path".into(),
+    );
+    if let Some(report) = method_report.as_mut() {
+        for entry in walkdir::WalkDir::new(&apk_dir) {
+            let entry = entry
+                .map_err(anyhow::Error::from)
+                .map_err(ShieldError::from)?;
+            if !entry.file_type().is_file()
+                || entry.path().extension().and_then(|s| s.to_str()) != Some("dex")
+            {
+                continue;
+            }
+            let relative = entry
+                .path()
+                .strip_prefix(&apk_dir)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let name = if relative.contains('/') {
+                format!("base/{relative}")
+            } else {
+                format!("base/dex/{relative}")
+            };
+            report.artifact_dexes.insert(
+                name,
+                crate::protection_report::file_sha256(entry.path()).map_err(ShieldError::from)?,
+            );
+        }
+    }
 
     emit_progress(&on_progress, &cancel, ProgressStep::Repack, "重打包APK")?;
     print_step("重打包APK");
@@ -692,8 +908,12 @@ pub fn protect_apk(
     }
     verify_in_apk(&opts.output, &injected_runtime).map_err(ShieldError::from)?;
     print_success("APK数据对齐完成");
-
-    Ok(())
+    if let Some(report) = method_report.as_mut() {
+        report
+            .bind(&opts.output, false)
+            .map_err(ShieldError::from)?;
+    }
+    Ok(method_report)
 }
 
 fn stage_external_pvm2_dexes(

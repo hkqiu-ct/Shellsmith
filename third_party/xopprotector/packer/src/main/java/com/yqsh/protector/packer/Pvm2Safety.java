@@ -1,9 +1,12 @@
 package com.yqsh.protector.packer;
 
 import com.android.dex.Code;
+import com.android.tools.smali.dexlib2.Opcode;
+import com.android.tools.smali.dexlib2.Opcodes;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +23,8 @@ import java.util.Map;
  * stay on ART, where verifier and handler semantics remain authoritative.</p>
  */
 final class Pvm2Safety {
+    private static final Opcodes OPCODES = Opcodes.getDefault();
+
     private Pvm2Safety() {
     }
 
@@ -40,6 +45,7 @@ final class Pvm2Safety {
     private static String checkInternal(short[] units, int registersSize, int insSize,
                                         boolean isStatic, ExceptionalInfo exceptional,
                                         boolean hasExceptionalFlow) {
+        if (exceptional != null && exceptional.invalid) return "semantic safety: malformed exception table";
         if (units == null || units.length == 0) return null;
         if (registersSize <= 0 || registersSize > 255) {
             return "semantic safety: invalid register frame";
@@ -72,16 +78,6 @@ final class Pvm2Safety {
         ArrayDeque<Integer> pending = new ArrayDeque<>();
         inStates.put(0, initial);
         pending.add(0);
-        if (exceptional != null) {
-            for (int handlerPc = 0; handlerPc < exceptional.handler.length; handlerPc++) {
-                if (!exceptional.handler[handlerPc] || !widths.containsKey(handlerPc)) continue;
-                FlowState handlerState = initial.copy();
-                handlerState.controlFlow = true;
-                if (mergeState(inStates, handlerPc, handlerState)) {
-                    pending.addLast(handlerPc);
-                }
-            }
-        }
 
         while (!pending.isEmpty()) {
             pc = pending.removeFirst();
@@ -98,6 +94,27 @@ final class Pvm2Safety {
                 state.controlFlow = true;
             }
 
+            // 异常边读取执行前的事实，不能继承解引用正常完成后的非空结论。
+            Opcode metadata = OPCODES.getOpcodeByValue(op);
+            if (exceptional != null && metadata != null && metadata.canThrow()) {
+                for (int handlerPc : exceptional.targets.getOrDefault(pc, List.of())) {
+                    if (!widths.containsKey(handlerPc)) return "semantic safety: malformed exception target";
+                    FlowState thrown = state.copy();
+                    thrown.controlFlow = true;
+                    // ponytail: 写目标在异常边保守作废，避免依赖 JNI 失败前是否已写入；精确放行需逐指令证明。
+                    if (metadata.setsRegister() && op != 0x1f) {
+                        int destination = destination(metadata, u0, units, pc);
+                        clearKnown(destination, thrown.knownNonNull);
+                        thrown.forgetTypeTest(destination);
+                        if (metadata.setsWideRegister()) {
+                            clearKnown(destination + 1, thrown.knownNonNull);
+                            thrown.forgetTypeTest(destination + 1);
+                        }
+                    }
+                    if (mergeState(inStates, handlerPc, thrown)) pending.addLast(handlerPc);
+                }
+            }
+
             if (requiresReceiver(op)) {
                 int argc = isInvoke35(op) ? (u0 >>> 12) & 0x0f : (u0 >>> 8) & 0xff;
                 if (argc == 0) {
@@ -110,9 +127,25 @@ final class Pvm2Safety {
                         : units[pc + 2] & 0xffff;
                 String reason = receiverReason(receiver, state.knownNonNull, state.controlFlow);
                 if (reason != null) return reason;
+                // 调用正常返回后接收者必非空；异常边已在执行前传播。
+                state.knownNonNull[receiver] = true;
             }
 
-            updateKnownNonNull(op, u0, units, pc, state.knownNonNull, registersSize);
+            // 字段/数组访问正常完成后，其对象必非空；先记录，再处理可能覆盖对象的目标寄存器。
+            if (op == 0x21 || (op >= 0x52 && op <= 0x5f)) {
+                setKnown((u0 >>> 12) & 0x0f, state.knownNonNull, true);
+            } else if (op >= 0x44 && op <= 0x51) {
+                setKnown(units[pc + 1] & 0xff, state.knownNonNull, true);
+            }
+            if (metadata != null && metadata.setsRegister() && op != 0x1f) {
+                int destination = destination(metadata, u0, units, pc);
+                state.forgetTypeTest(destination);
+                if (metadata.setsWideRegister()) state.forgetTypeTest(destination + 1);
+                int source = (u0 >>> 12) & 0x0f;
+                if (op == 0x20 && source != destination && source < registersSize && destination < registersSize)
+                    state.typeTestSource[destination] = source;
+            }
+            updateKnownNonNull(op, u0, units, pc, state.knownNonNull);
             for (Successor successor : successors(units, pc, op, width, state, widths)) {
                 if (!widths.containsKey(successor.pc)) {
                     return "semantic safety: malformed branch target";
@@ -158,6 +191,10 @@ final class Pvm2Safety {
             boolean merged = existing.knownNonNull[i] && incoming.knownNonNull[i];
             changed |= existing.knownNonNull[i] != merged;
             existing.knownNonNull[i] = merged;
+            if (existing.typeTestSource[i] != incoming.typeTestSource[i] && existing.typeTestSource[i] != -1) {
+                existing.typeTestSource[i] = -1;
+                changed = true;
+            }
         }
         return changed;
     }
@@ -174,12 +211,24 @@ final class Pvm2Safety {
             targetState.controlFlow = true;
             fallthroughState.controlFlow = true;
             int register = (units[pc] >>> 8) & 0xff;
-            // ponytail: Refine only unary null checks; pairwise if-eq/if-ne
-            // relations stay conservative until the lattice tracks aliases.
+            // instanceof 为真保证源对象非空；只保留尚未被改写的直接关系。
+            if ((op == 0x38 || op == 0x39) && register < state.typeTestSource.length) {
+                int source = state.typeTestSource[register];
+                if (source >= 0) setKnown(source,
+                        (op == 0x38 ? fallthroughState : targetState).knownNonNull, true);
+            }
+            // ponytail: 仅传播当前等值边的非空事实；跨指令关系需另建别名分析。
             if (op == 0x38) { // if-eqz: fallthrough is the non-null path.
                 setKnown(register, fallthroughState.knownNonNull, true);
             } else if (op == 0x39) { // if-nez: target is the non-null path.
                 setKnown(register, targetState.knownNonNull, true);
+            } else if (op == 0x32 || op == 0x33) {
+                int left = register & 0x0f, right = register >>> 4;
+                FlowState equal = op == 0x32 ? targetState : fallthroughState;
+                if (left < equal.knownNonNull.length && right < equal.knownNonNull.length
+                        && (equal.knownNonNull[left] || equal.knownNonNull[right])) {
+                    equal.knownNonNull[left] = equal.knownNonNull[right] = true;
+                }
             }
             out.add(new Successor(target, targetState));
             if (widths.containsKey(pc + width)) {
@@ -278,29 +327,32 @@ final class Pvm2Safety {
         Code.Try[] tries = code.getTries();
         if (tries == null || tries.length == 0) return result;
         Code.CatchHandler[] handlers = code.getCatchHandlers();
-        if (handlers == null) return result;
+        if (handlers == null) { result.invalid = true; return result; }
         for (Code.Try t : tries) {
-            int start = Math.max(0, t.getStartAddress());
-            int end = Math.min(units.length, start + t.getInstructionCount());
+            int start = t.getStartAddress(), count = t.getInstructionCount();
+            if (start < 0 || start >= units.length || count <= 0 || count > units.length - start
+                    || t.getCatchHandlerIndex() < 0 || t.getCatchHandlerIndex() >= handlers.length) {
+                result.invalid = true; return result;
+            }
+            int end = start + count;
+            Code.CatchHandler handler = handlers[t.getCatchHandlerIndex()];
+            List<Integer> targets = new ArrayList<>();
+            if (handler.getAddresses() != null) for (int address : handler.getAddresses()) targets.add(address);
+            if (handler.getCatchAllAddress() >= 0) targets.add(handler.getCatchAllAddress());
+            if (targets.isEmpty()) { result.invalid = true; return result; }
+            for (int address : targets) {
+                if (address < 0 || address >= units.length) { result.invalid = true; return result; }
+                result.handler[address] = true;
+            }
             for (int pc = start; pc < end;) {
                 result.inTry[pc] = true;
-                int width;
+                result.targets.computeIfAbsent(pc, ignored -> new ArrayList<>()).addAll(targets);
                 try {
-                    width = widthOf(units, pc, units[pc] & 0xff);
-                } catch (RuntimeException ex) {
-                    break;
-                }
-                if (width <= 0) break;
-                pc += width;
+                    int width = widthOf(units, pc, units[pc] & 0xff);
+                    if (width <= 0 || width > end - pc) { result.invalid = true; return result; }
+                    pc += width;
+                } catch (RuntimeException ex) { result.invalid = true; return result; }
             }
-            Code.CatchHandler handler = handlers[t.getCatchHandlerIndex()];
-            if (handler.getAddresses() != null) {
-                for (int address : handler.getAddresses()) {
-                    if (address >= 0 && address < result.handler.length) result.handler[address] = true;
-                }
-            }
-            int catchAll = handler.getCatchAllAddress();
-            if (catchAll >= 0 && catchAll < result.handler.length) result.handler[catchAll] = true;
         }
         return result;
     }
@@ -308,6 +360,8 @@ final class Pvm2Safety {
     private static final class ExceptionalInfo {
         final boolean[] inTry;
         final boolean[] handler;
+        final Map<Integer, List<Integer>> targets = new HashMap<>();
+        boolean invalid;
 
         ExceptionalInfo(int size) {
             inTry = new boolean[size];
@@ -317,15 +371,24 @@ final class Pvm2Safety {
 
     private static final class FlowState {
         final boolean[] knownNonNull;
+        final int[] typeTestSource;
         boolean controlFlow;
 
         FlowState(int registersSize) {
             knownNonNull = new boolean[registersSize];
+            typeTestSource = new int[registersSize];
+            Arrays.fill(typeTestSource, -1);
+        }
+
+        void forgetTypeTest(int register) {
+            for (int i = 0; i < typeTestSource.length; i++)
+                if (i == register || typeTestSource[i] == register) typeTestSource[i] = -1;
         }
 
         FlowState copy() {
             FlowState copy = new FlowState(knownNonNull.length);
             System.arraycopy(knownNonNull, 0, copy.knownNonNull, 0, knownNonNull.length);
+            System.arraycopy(typeTestSource, 0, copy.typeTestSource, 0, typeTestSource.length);
             copy.controlFlow = controlFlow;
             return copy;
         }
@@ -342,86 +405,30 @@ final class Pvm2Safety {
     }
 
     private static void updateKnownNonNull(int op, int u0, short[] units, int pc,
-                                           boolean[] known, int registersSize) {
-        switch (op) {
-            case 0x01: case 0x04: { // move[/wide]
-                clearKnown((u0 >>> 8) & 0x0f, known);
-                return;
-            }
-            case 0x02: case 0x05: { // move[/wide]/from16
-                clearKnown((u0 >>> 8) & 0xff, known);
-                return;
-            }
-            case 0x03: case 0x06: { // move[/wide]/16
-                clearKnown(units[pc + 1] & 0xffff, known);
-                return;
-            }
-            case 0x07: { // move-object
-                int dst = (u0 >>> 8) & 0x0f;
-                int src = (u0 >>> 12) & 0x0f;
-                copyKnown(dst, src, known);
-                return;
-            }
-            case 0x08: { // move-object/from16
-                int dst = (u0 >>> 8) & 0xff;
-                int src = units[pc + 1] & 0xffff;
-                copyKnown(dst, src, known);
-                return;
-            }
-            case 0x09: { // move-object/16
-                int dst = units[pc + 1] & 0xffff;
-                int src = units[pc + 2] & 0xffff;
-                copyKnown(dst, src, known);
-                return;
-            }
-            case 0x0a: case 0x0b: case 0x0c: // result values may legally be null
-                clearKnown((u0 >>> 8) & 0xff, known);
-                return;
-            case 0x0d: // caught Throwable is non-null
-                setKnown((u0 >>> 8) & 0xff, known, true);
-                return;
-            case 0x12: // const/4
-                clearKnown((u0 >>> 8) & 0x0f, known);
-                return;
-            case 0x13: case 0x14: case 0x15: case 0x16: case 0x17: case 0x18: case 0x19:
-                clearKnown((u0 >>> 8) & 0xff, known);
-                return;
-            case 0x1a: case 0x1b: case 0x1c: // const-string[/jumbo]/class
-                setKnown((u0 >>> 8) & 0xff, known, true);
-                return;
-            case 0x20: case 0x21:
-                clearKnown((u0 >>> 8) & 0x0f, known);
-                return;
-            case 0x2d: case 0x2e: case 0x2f: case 0x30: case 0x31:
-                clearKnown((u0 >>> 8) & 0xff, known);
-                return;
-            case 0x22: // new-instance
-                setKnown((u0 >>> 8) & 0xff, known, true);
-                return;
-            case 0x23: // new-array (22c)
-                setKnown((u0 >>> 8) & 0x0f, known, true);
-                return;
-            case 0x44: case 0x45: case 0x46: case 0x47: case 0x48: case 0x49: case 0x4a:
-            case 0x60: case 0x61: case 0x62: case 0x63: case 0x64: case 0x65: case 0x66:
-                // aget/iget/sget destinations may contain null.
-                clearKnown((u0 >>> 8) & 0xff, known);
-                return;
-            case 0x52: case 0x53: case 0x54: case 0x55: case 0x56: case 0x57: case 0x58:
-                // iget is a 22c instruction: vA is the low nibble of the high byte.
-                clearKnown((u0 >>> 8) & 0x0f, known);
-                return;
-            default:
-                if (op >= 0x7b && op <= 0x8f) {
-                    clearKnown((u0 >>> 8) & 0x0f, known);
-                } else if (op >= 0x90 && op <= 0xaf) {
-                    clearKnown((u0 >>> 8) & 0xff, known);
-                } else if (op >= 0xb0 && op <= 0xcf) {
-                    clearKnown((u0 >>> 8) & 0x0f, known);
-                } else if (op >= 0xd0 && op <= 0xe2) {
-                    clearKnown((u0 >>> 8) & 0x0f, known);
-                }
-                return;
+                                           boolean[] known) {
+        // 对象移动先读取源事实，避免同寄存器移动被误清空；check-cast 不改变值。
+        if (op == 0x07) { copyKnown((u0 >>> 8) & 0x0f, (u0 >>> 12) & 0x0f, known); return; }
+        if (op == 0x08) { copyKnown((u0 >>> 8) & 0xff, units[pc + 1] & 0xffff, known); return; }
+        if (op == 0x09) { copyKnown(units[pc + 1] & 0xffff, units[pc + 2] & 0xffff, known); return; }
+        if (op == 0x1f) return;
+
+        // 复用 dexlib2 的写寄存器标记，统一清除 wide 的两格及 lit8 的完整 8 位目标。
+        Opcode opcode = OPCODES.getOpcodeByValue(op);
+        if (opcode == null || !opcode.setsRegister()) return;
+        int destination = destination(opcode, u0, units, pc);
+        clearKnown(destination, known);
+        if (opcode.setsWideRegister()) clearKnown(destination + 1, known);
+        if (op == 0x0d || op == 0x1a || op == 0x1b || op == 0x1c || op == 0x22 || op == 0x23) {
+            setKnown(destination, known, true);
         }
+    }
+
+    private static int destination(Opcode opcode, int u0, short[] units, int pc) {
+        return switch (opcode.format) {
+            case Format11n, Format12x, Format22c, Format22cs, Format22s -> (u0 >>> 8) & 0x0f;
+            case Format32x -> units[pc + 1] & 0xffff;
+            default -> (u0 >>> 8) & 0xff;
+        };
     }
 
     private static void copyKnown(int dst, int src, boolean[] known) {

@@ -18,6 +18,8 @@ constexpr uint16_t PVM2_VERSION_V3 = 3;
 constexpr uint16_t PVM2_VERSION_V4 = 4;
 constexpr uint16_t PVM2_VERSION_V5 = 5;
 constexpr uint16_t PVM2_VERSION_V6 = 6;
+constexpr uint16_t PVM2_VERSION_V7 = 7;
+constexpr uint16_t PVM2_VERSION_V8 = 8;
 
 /** Morph table size for v3 images. */
 constexpr uint8_t PVM2_OP_COUNT_V3 = 40;
@@ -164,6 +166,9 @@ struct Pvm2Handler {
 };
 
 struct Pvm2Image {
+    ~Pvm2Image();
+    void wipe() noexcept;
+    size_t plaintext_bytes() const noexcept;
     uint16_t version = 0;
     uint16_t reg_count = 0;
     uint16_t ins_size = 0;
@@ -174,12 +179,15 @@ struct Pvm2Image {
     /** inverse[wire] = canonical; identity for v1/v2. */
     std::array<uint8_t, 256> inv_map{};
     bool has_morph = false;
+    // v7 认证镜像内的策略；旧格式保留有限缓存。
+    bool clear_after_use = false;
     /** v5+: XOR key for CONST / CONST_WIDE immediates. v1–v4 = 0. */
     int32_t imm_key = 0;
     /** Extra compiler scratch regs after the Dalvik frame. v2–v4 = 1; v1 = 0. */
     uint8_t scratch_extra = 1;
     /** v6 logical Dalvik register -> physical VM register slot. */
     std::vector<uint8_t> reg_map;
+    std::vector<uint8_t> argument_types;
     std::vector<std::string> strings;
     std::vector<std::string> methods;
     std::vector<std::string> fields;

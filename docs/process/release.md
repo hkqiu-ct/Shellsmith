@@ -276,16 +276,16 @@ Release Notes 末尾同时保留 GitHub 生成的 `Full Changelog` 比较链接�
 1. 更新版本号（见上方"版本号同步"）
 2. 运行发布前轻量检查：`bash scripts/check-release-ready.sh`
 3. 确认 CI 通过
-4. 打 tag 并推送：`git tag vx.y.z && git push origin main vx.y.z`
-5. 等待 Release workflow 完成
+4. PR 合入已验证的 `main` 后执行：`gh workflow run release.yml --ref main -f version=x.y.z`；不直接推送 `main` 或提前创建发布 tag
+5. 等待 Release workflow 完成三平台构建、更新签名核验和 tag 创建
 6. 检查 GitHub Release 的产物、校验和，以及固定的中英文 Release Notes 章节
-7. 稳定版本确认无误后取消草稿正式发布；预发布版本确认可见性与产物即可
+7. 确认工作流已公开版本且稳定版成为 latest；失败时保留草稿，修复后重跑，不手动绕过产物核验
 
 ### 正式版前产物检查
 
 正式版发布前需额外确认：
 
-- Release 页面只包含 GUI 安装包与校验和文件，不上传 CLI 包
+- Release 页面包含 GUI 安装包、签名更新包、更新清单、校验和及 Android 运行时资源，不上传 CLI 包
 - 安装包内包含 `apktool.jar`、`apksigner.jar`、`resources.zip`
 - 安装包内不包含测试 APK、测试证书、`shield.db`、`config.toml`、`.env` 或本地缓存
 - README、使用文档、Release Notes 已说明 Java/PVM2 版本、证书管理、密码加密、16 KB 对齐，以及 macOS adhoc 与 Developer ID 公证模式的区别

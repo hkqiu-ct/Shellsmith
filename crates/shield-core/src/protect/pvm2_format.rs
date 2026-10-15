@@ -25,7 +25,7 @@ const OPCODES_VERSION_FIELD: &str = "VERSION";
 /// 读取打包器 JAR 声明的 PVM2 镜像格式版本。
 ///
 /// `Ok(None)` 表示 JAR 中没有该字段（不是 Xop 打包器，或上游结构变了）；
-/// 这种情况跳过比对，避免把未知当成不兼容。
+/// 调用方必须拒绝未知版本，避免把缺少声明当成兼容。
 pub(crate) fn packer_format_version(jar: &Path) -> Result<Option<u32>> {
     let file =
         File::open(jar).with_context(|| format!("打开 PVM2 打包器失败：{}", jar.display()))?;
@@ -43,17 +43,34 @@ pub(crate) fn packer_format_version(jar: &Path) -> Result<Option<u32>> {
     Ok(static_int_constant(&class, OPCODES_VERSION_FIELD))
 }
 
+/// 镜像版本相同不代表支持新的方法报告，旧打包器必须明确拒绝。
+pub(crate) fn verify_report_capability(jar: &Path) -> Result<()> {
+    let mut archive = zip::ZipArchive::new(File::open(jar)?)?;
+    let mut class = Vec::new();
+    archive
+        .by_name("com/yqsh/protector/packer/Pvm2Report.class")
+        .context("打包器不支持方法级验证，请运行 make build-pvm2")?
+        .read_to_end(&mut class)?;
+    anyhow::ensure!(
+        static_int_constant(&class, "SCHEMA_VERSION") == Some(2),
+        "打包器方法报告版本不受支持"
+    );
+    Ok(())
+}
+
 /// 比对打包器与壳运行时的 PVM2 格式版本。
 ///
 /// 运行时兼容更旧的格式，所以只有打包器更新才拒绝；`runtime_max` 为 `None`
-/// 表示旧资源包没有声明版本，此时跳过比对。
+/// 表示旧资源包没有声明版本，必须重建后才允许使用 PVM2。
 pub(crate) fn verify_format_compatibility(packer: &Path, runtime_max: Option<u32>) -> Result<()> {
-    let Some(packer_version) = packer_format_version(packer)? else {
-        return Ok(());
-    };
-    let Some(runtime_version) = runtime_max else {
-        return Ok(());
-    };
+    let packer_version = packer_format_version(packer)?
+        .context("打包器缺少 PVM2 格式声明，请运行 make build-pvm2")?;
+    let runtime_version =
+        runtime_max.context("运行时缺少 PVM2 格式声明，请运行 make build-stub")?;
+    anyhow::ensure!(
+        packer_version > 0 && runtime_version > 0,
+        "PVM2 格式版本无效"
+    );
     if packer_version <= runtime_version {
         return Ok(());
     }
@@ -307,17 +324,17 @@ mod tests {
     }
 
     #[test]
-    fn 版本一致运行时更新或缺少声明时放行() {
+    fn 版本一致或运行时更新时放行_缺少声明时拒绝() {
         let dir = temp_jar(Some(synthetic_class(6, "VERSION", false)));
         let jar = dir.path().join("packer.jar");
         assert!(verify_format_compatibility(&jar, Some(6)).is_ok());
         // 运行时支持更旧的格式，不算不兼容。
         assert!(verify_format_compatibility(&jar, Some(9)).is_ok());
-        // 旧资源包没有声明版本，跳过比对。
-        assert!(verify_format_compatibility(&jar, None).is_ok());
+        // 不允许旧资源包通过缺少声明绕过握手。
+        assert!(verify_format_compatibility(&jar, None).is_err());
 
         let unknown = temp_jar(None);
-        assert!(verify_format_compatibility(&unknown.path().join("packer.jar"), Some(5)).is_ok());
+        assert!(verify_format_compatibility(&unknown.path().join("packer.jar"), Some(5)).is_err());
     }
 
     /// 内置打包器 JAR 是随仓库分发的产物；测试固定校验它与发布运行时同源，
@@ -325,6 +342,7 @@ mod tests {
     #[test]
     fn 内置打包器_jar_与发布运行时的格式版本一致() {
         let jar = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/xop-pvm2-packer.jar");
+        verify_report_capability(&jar).expect("内置打包器必须支持认证的明文清理策略报告");
         let version = packer_format_version(&jar)
             .expect("应能解析内置打包器")
             .expect("内置打包器必须声明 PVM2 格式版本");

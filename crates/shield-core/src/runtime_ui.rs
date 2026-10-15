@@ -131,7 +131,7 @@ pub(crate) fn rewrite_windows(
 
 pub(crate) type ApkIndex = std::collections::BTreeMap<String, (u64, u32)>;
 pub(crate) fn apk_index(path: &Path) -> Result<ApkIndex> {
-    let mut archive = zip::ZipArchive::new(fs::File::open(path)?)?;
+    let mut archive = crate::protection_report::checked_archive(path)?;
     let mut index = ApkIndex::new();
     for i in 0..archive.len() {
         let entry = archive.by_index(i)?;

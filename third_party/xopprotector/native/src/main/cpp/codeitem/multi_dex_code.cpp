@@ -2,6 +2,7 @@
 #include "common/log.h"
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
 namespace protector::codeitem {
 
@@ -35,6 +36,7 @@ static bool add_overflow(size_t a, size_t b, size_t* out) {
 bool parse(const uint8_t* data, size_t size,
            std::vector<uint8_t>& owned_blob,
            std::unordered_map<int, std::unordered_map<uint32_t, CodeItem*>>& out_map) {
+    clear_map(out_map);
     if (data == nullptr || size < 4) {
         PLOGE("code.bin too small");
         return false;
@@ -57,18 +59,18 @@ bool parse(const uint8_t* data, size_t size,
         // Packer may write empty v4 when no methods were hollowed (DEX still encrypted in zip).
         clear_map(out_map);
         PLOGI("code.bin has zero dex blobs (encrypt-only / no hollow)");
-        return true;
+        return size == 4;
     }
     if (size < static_cast<size_t>(4 + dex_count * 4)) {
         PLOGE("invalid dex_count");
         return false;
     }
 
-    clear_map(out_map);
+    size_t expected_offset = 4 + size_t{dex_count} * 4;
     for (uint16_t i = 0; i < dex_count; i++) {
         uint32_t off32 = read_u32(buf + 4 + i * 4);
         size_t off = off32;
-        if (off > size || size - off < 2) {
+        if (off != expected_offset || off > size || size - off < 2) {
             PLOGE("dex[%u] offset out of range: %u", i, off32);
             clear_map(out_map);
             return false;
@@ -86,6 +88,11 @@ bool parse(const uint8_t* data, size_t size,
         }
         uint16_t method_count = read_u16(buf + cursor);
         if (add_overflow(cursor, 2, &cursor)) {
+            clear_map(out_map);
+            return false;
+        }
+        if (dex_number > static_cast<uint32_t>(std::numeric_limits<int>::max())
+                || out_map.count(static_cast<int>(dex_number)) != 0 || method_count == 0) {
             clear_map(out_map);
             return false;
         }
@@ -108,7 +115,8 @@ bool parse(const uint8_t* data, size_t size,
                 clear_map(out_map);
                 return false;
             }
-            if (plain_size == 0 || enc_size < 12 + 16) {
+            if (plain_size == 0 || size_t{enc_size} != size_t{plain_size} + 28
+                    || method_map.count(method_idx) != 0) {
                 PLOGE("dex[%u] method bad sizes idx=%u plain=%u enc=%u",
                       i, method_idx, plain_size, enc_size);
                 clear_map(out_map);
@@ -120,19 +128,15 @@ bool parse(const uint8_t* data, size_t size,
             item->insns_size = enc_size;
             item->flags = flags;
             item->insns = buf + cursor;
-            auto it = method_map.find(method_idx);
-            if (it != method_map.end()) {
-                delete it->second;
-                it->second = item;
-            } else {
-                method_map[method_idx] = item;
-            }
+            method_map.emplace(method_idx, item);
             cursor = need_insns;
         }
+        expected_offset = cursor;
         PLOGI("dex_number=%u (slot %u) methods loaded: %zu",
               dex_number, i, method_map.size());
     }
-    if (out_map.empty()) {
+    if (expected_offset != size || out_map.empty()) {
+        clear_map(out_map);
         return false;
     }
     return true;

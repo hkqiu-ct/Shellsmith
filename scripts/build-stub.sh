@@ -416,7 +416,13 @@ if [ -f "$XOP_PVM2_FORMAT_HEADER" ]; then
         echo -e "${GREEN}✓ PVM2 格式版本: v${XOP_PVM2_FORMAT_VERSION}（来自 $XOP_PVM2_FORMAT_HEADER）${NC}"
     fi
 else
-    echo -e "${YELLOW}⚠ 未找到 $XOP_PVM2_FORMAT_HEADER，metadata.json 不声明 xop_pvm2_format（将跳过版本比对）${NC}"
+    echo -e "${RED}✗ 未找到 $XOP_PVM2_FORMAT_HEADER，无法声明 PVM2 版本${NC}"
+    exit 1
+fi
+
+if [ -z "$XOP_PVM2_FORMAT_FIELD" ]; then
+    echo "无法读取 PVM2 格式版本，停止构建" >&2
+    exit 1
 fi
 
 cat > "$OUTPUT_DIR/metadata.json" << EOF

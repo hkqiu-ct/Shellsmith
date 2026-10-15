@@ -37,6 +37,8 @@ pub(crate) struct AabProtectRequest {
     pub(crate) ai_resistance: AiResistanceRequest,
     #[serde(default)]
     pub(crate) xop_true_vmp_prefixes: Vec<String>,
+    pub(crate) pvm2_required_methods: Option<String>,
+    pub(crate) native_vmp_evidence: Option<String>,
 }
 
 pub(crate) fn check_aab(app: &tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
@@ -76,13 +78,14 @@ pub(crate) async fn execute_protect_aab(
     let apksigner = find_apksigner_path(&app)
         .ok_or_else(|| ExecutionFailure::from("当前安装包缺少 apksigner".to_string()))?;
     let ui_packer = find_xop_pvm2_packer_path(&app);
-    let pvm2 = if request.xop_true_vmp_prefixes.is_empty() {
-        None
-    } else {
-        Some(find_xop_pvm2_packer_path(&app).ok_or_else(|| {
-            ExecutionFailure::from("当前安装包缺少内置 Xop PVM2 Packer".to_string())
-        })?)
-    };
+    let pvm2 =
+        if request.xop_true_vmp_prefixes.is_empty() && request.pvm2_required_methods.is_none() {
+            None
+        } else {
+            Some(find_xop_pvm2_packer_path(&app).ok_or_else(|| {
+                ExecutionFailure::from("当前安装包缺少内置 Xop PVM2 Packer".to_string())
+            })?)
+        };
     let cancel = Arc::clone(&cancel_handle.0);
     let task_id = request.task_id.clone();
     let task_window = window.clone();
@@ -132,6 +135,14 @@ pub(crate) async fn execute_protect_aab(
             xop_packer: None,
             xop_pvm2_packer: pvm2,
             xop_true_vmp_prefix: request.xop_true_vmp_prefixes,
+            pvm2_required_methods: request
+                .pvm2_required_methods
+                .map(PathBuf::from)
+                .map(strip_unc_prefix),
+            native_vmp_evidence: request
+                .native_vmp_evidence
+                .map(PathBuf::from)
+                .map(strip_unc_prefix),
             xop_shell_dir: None,
             xop_profile: XopProfileArg::Industry,
             xop_no_protect_so: false,

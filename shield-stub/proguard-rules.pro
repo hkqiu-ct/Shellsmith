@@ -71,3 +71,7 @@
 
 # DEX 调用改写的固定桥，框架回调保留以兼容旧 Android 接口。
 -keep class dev.mocika.shield.loader.MocikaUi { public *; }
+
+-keepclassmembernames class dev.mocika.shield.loader.Ld {
+    static native void y(int);
+}

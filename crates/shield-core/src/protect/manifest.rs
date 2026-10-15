@@ -12,6 +12,13 @@ pub(crate) enum NativeLibPackagingPolicy {
     Unspecified,
 }
 
+pub(crate) fn read_package_name(apk_dir: &Path) -> Result<String> {
+    let content = fs::read_to_string(apk_dir.join("AndroidManifest.xml"))?;
+    let start = content.find("<manifest").context("Manifest 缺少根标签")?;
+    let end = find_tag_end(&content, start).context("Manifest 根标签未关闭")?;
+    extract_xml_attr(&content[start..end], "package").context("Manifest 缺少包名")
+}
+
 pub(crate) fn read_native_lib_packaging_policy(apk_dir: &Path) -> Result<NativeLibPackagingPolicy> {
     let manifest_path = apk_dir.join("AndroidManifest.xml");
     let content = fs::read_to_string(&manifest_path).context("读取 AndroidManifest.xml 失败")?;
@@ -251,12 +258,13 @@ fn set_xml_attr(tag: &str, attr: &str, value: &str) -> String {
         }
     }
     let close = find_tag_end(tag, 0).unwrap_or(tag.len());
+    let insert = close - if tag[..close].ends_with("/>") { 2 } else { 1 };
     format!(
         "{} {}=\"{}\"{}",
-        &tag[..close - 1],
+        &tag[..insert],
         attr,
         value,
-        &tag[close - 1..]
+        &tag[insert..]
     )
 }
 
@@ -530,24 +538,26 @@ mod tests {
     #[test]
     fn modify_manifest_self_closing_application_expanded() {
         let dir = tempfile::tempdir().unwrap();
-        let manifest = concat!(
-            r#"<?xml version="1.0" encoding="utf-8"?>"#,
-            "\n<manifest package=\"com.example\">\n",
-            "    <application android:name=\"com.example.App\" />\n",
-            "</manifest>"
-        );
-        fs::write(dir.path().join("AndroidManifest.xml"), manifest).unwrap();
-        modify_manifest(
-            dir.path(),
-            "dev.mocika.StubApp",
-            None,
-            EnvironmentPolicy::Compatible,
-        )
-        .unwrap();
-        let result = fs::read_to_string(dir.path().join("AndroidManifest.xml")).unwrap();
-        assert!(result.contains(r#"android:name="dev.mocika.StubApp""#));
-        assert!(result.contains("</application>"));
-        assert!(result.contains("ORIGINAL_APPLICATION"));
+        for application in [
+            "<application/>",
+            "<application android:name=\"com.example.App\" />",
+        ] {
+            let manifest = format!("<manifest package=\"com.example\">{application}</manifest>");
+            fs::write(dir.path().join("AndroidManifest.xml"), manifest).unwrap();
+            modify_manifest(
+                dir.path(),
+                "dev.mocika.StubApp",
+                Some("dev.mocika.Factory"),
+                EnvironmentPolicy::Compatible,
+            )
+            .unwrap();
+            let result = fs::read_to_string(dir.path().join("AndroidManifest.xml")).unwrap();
+            assert!(result.contains(r#"android:name="dev.mocika.StubApp""#));
+            assert!(result.contains("</application>"));
+            assert!(result.contains("ORIGINAL_APPLICATION"));
+            assert!(result.contains(r#"android:appComponentFactory="dev.mocika.Factory""#));
+            assert!(!result.contains("/ android:"));
+        }
     }
 
     #[test]

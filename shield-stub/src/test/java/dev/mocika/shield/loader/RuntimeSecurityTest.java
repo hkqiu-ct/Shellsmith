@@ -29,6 +29,13 @@ public class RuntimeSecurityTest {
     }
 
     @Test
+    public void 阻断状态在所有策略下拒绝且低置信信号仅记录() {
+        assertEquals(true, RuntimeSecurity.shouldReject(8, false));
+        assertEquals(true, RuntimeSecurity.shouldReject(8, true));
+        assertEquals(false, RuntimeSecurity.shouldReject(4, true));
+    }
+
+    @Test
     public void 严格模式拒绝Root信号() {
         assertEquals(true, RuntimeSecurity.shouldReject(2, true));
     }

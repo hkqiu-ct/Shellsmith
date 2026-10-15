@@ -32,6 +32,8 @@ struct ProtectConfig {
     environment_policy: Option<String>,
     profile: Option<String>,
     ai_resistance: Option<String>,
+    pvm2_required_methods: Option<PathBuf>,
+    native_vmp_evidence: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -102,6 +104,12 @@ impl CliConfig {
                 .unwrap_or_default(),
             xop_pvm2_packer: args.xop_pvm2_packer,
             xop_true_vmp_prefix: args.xop_true_vmp_prefix,
+            pvm2_required_methods: args
+                .pvm2_required_methods
+                .or_else(|| self.protect.pvm2_required_methods.clone()),
+            native_vmp_evidence: args
+                .native_vmp_evidence
+                .or_else(|| self.protect.native_vmp_evidence.clone()),
             json: args.json,
             verbose: args.verbose,
         })
@@ -142,6 +150,8 @@ impl CliConfig {
             &mut self.protect.ui_packer,
             &mut self.protect.resources,
             &mut self.protect.apksigner,
+            &mut self.protect.pvm2_required_methods,
+            &mut self.protect.native_vmp_evidence,
             &mut self.sign.input,
             &mut self.sign.output,
             &mut self.sign.keystore,
@@ -168,6 +178,8 @@ pub(crate) struct ResolvedProtectArgs {
     pub ai_resistance: AiResistanceArg,
     pub xop_pvm2_packer: Option<PathBuf>,
     pub xop_true_vmp_prefix: Vec<String>,
+    pub pvm2_required_methods: Option<PathBuf>,
+    pub native_vmp_evidence: Option<PathBuf>,
     pub json: bool,
     pub verbose: bool,
 }

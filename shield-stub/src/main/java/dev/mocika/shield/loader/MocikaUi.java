@@ -120,6 +120,7 @@ public final class MocikaUi implements Application.ActivityLifecycleCallbacks {
         boolean reject = checkAdb();
         if (recheck) reject |= RuntimeSecurity.shouldReject(Ld.r(), strict);
         if (reject) {
+            RuntimeSecurity.block();
             Log.w("RuntimeSecurity", "U02");
             for (Activity activity : new HashSet<>(started)) activity.finishAffinity();
             // 受控结束当前业务进程，不用遮罩冒充视图树/后台业务已经关闭。

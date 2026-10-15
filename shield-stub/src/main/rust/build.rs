@@ -66,6 +66,10 @@ fn main() {
     for source in &sources {
         build.file(cpp.join(source));
     }
+    println!("cargo:rerun-if-env-changed=MOCIKA_RUNTIME_PROFILE");
+    if env::var("MOCIKA_RUNTIME_PROFILE").as_deref() == Ok("1") {
+        build.define("MOCIKA_PVM2_PROFILE", None);
+    }
     build.compile("mocika_xop_pvm2");
     // cc only emits -lc++_static. The NDK keeps RTTI/exception/new-delete in
     // separate archives, so a cdylib can otherwise link with unresolved C++
@@ -83,6 +87,7 @@ fn main() {
         rerun(&cpp.join(source));
     }
     rerun(&cpp.join("common/runtime_state.h"));
+    rerun(&cpp.join("common/secure_memory.h"));
     rerun(&cpp.join("codeitem/multi_dex_code.h"));
     rerun(&cpp.join("crypto/aes.h"));
     rerun(&cpp.join("vm/pvm2_format.h"));

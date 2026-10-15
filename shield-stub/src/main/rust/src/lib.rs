@@ -37,6 +37,11 @@ pub unsafe extern "C" fn JNI_OnLoad(
     };
     let methods = [
         NativeMethod {
+            name: "y".into(),
+            sig: "(I)V".into(),
+            fn_ptr: configure_runtime_gate as *mut c_void,
+        },
+        NativeMethod {
             name: env!("STUB_METHOD_INJECT_DEX").into(),
             sig: "(Ljava/lang/ClassLoader;[Ljava/lang/String;Ljava/lang/String;)Z".into(),
             fn_ptr: f1 as *mut c_void,
@@ -142,12 +147,16 @@ extern "C" fn f9(mut env: JNIEnv, _class: JClass, name: JString, encrypted: JByt
 }
 
 extern "C" fn f5(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     dex_index: jint,
     method_index: jint,
     args: jobjectArray,
 ) -> jobject {
+    if !xop_pvm2::method_allowed() {
+        let _ = env.throw_new("java/lang/SecurityException", "S01");
+        return std::ptr::null_mut();
+    }
     unsafe { xop_pvm2::interpret(env.get_raw(), dex_index, method_index, args) }
 }
 
@@ -173,7 +182,17 @@ extern "C" fn f7(mut env: JNIEnv, _class: JClass, chunk: JByteArray) -> jobject 
 /// 每次进程启动的环境检查入口。
 /// 位 0 表示高置信反调试命中（可阻断），位 1 表示高置信 Root 命中，
 /// 位 2 表示低置信可疑信号（端口/临时文件/Hook 映射，仅记录不阻断）。
+extern "C" fn configure_runtime_gate(mut env: JNIEnv, _class: JClass, policy: jint) {
+    if !xop_pvm2::configure_gate(policy) && policy != 0 {
+        let _ = env.throw_new("java/lang/SecurityException", "S01");
+    }
+}
+
 extern "C" fn f3(_env: JNIEnv, _class: JClass) -> jint {
+    xop_pvm2::observe_environment(environment_signals())
+}
+
+fn environment_signals() -> jint {
     let mut signals = 0;
     if anti_debug::check() {
         signals |= 1;
@@ -487,15 +506,20 @@ extern "C" fn f6(mut env: JNIEnv, _class: JClass, ctx: JObject, dex_data: JByteA
             jni_get_actual_signature(&mut env, &ctx).map_err(|e| format!("e3: {e}"))?;
         let (expected_signature, xop, assets_key, native_so_key) =
             bin_loader::parse_xop_pvm2_payload(payload, actual_signature.as_bytes())?;
-        if !expected_signature.is_empty()
-            && !timing_safe_eq(actual_signature.as_bytes(), expected_signature.as_bytes())
-        {
-            return Err("e4".to_string());
-        }
-        assets_pas2::initialize(assets_key)?;
-        native_so::initialize_wrap_key(native_so_key)?;
-        let (code, key) = xop.ok_or_else(|| "PVM2 marker exists without sidecar".to_string())?;
-        xop_pvm2::initialize(&code, &key)
+        let (code, mut key) =
+            xop.ok_or_else(|| "PVM2 marker exists without sidecar".to_string())?;
+        let initialized = (|| {
+            if !expected_signature.is_empty()
+                && !timing_safe_eq(actual_signature.as_bytes(), expected_signature.as_bytes())
+            {
+                return Err("e4".to_string());
+            }
+            assets_pas2::initialize(assets_key)?;
+            native_so::initialize_wrap_key(native_so_key)?;
+            xop_pvm2::initialize(&code, &mut key)
+        })();
+        xop_pvm2::wipe_key(&mut key);
+        initialized
     })();
     match result {
         Ok(()) => JNI_TRUE,
@@ -587,18 +611,22 @@ fn decrypt_dex_files(
     let payload = bin_loader::extract_from_dex_tail(&dex_bytes)
         .map_err(|e| format!("提取 MSHD payload 失败: {e}"))?;
     let actual_signature = jni_get_actual_signature(env, ctx).map_err(|e| format!("e3: {e}"))?;
-    let decoded = bin_loader::parse_and_decompress_payload(payload, actual_signature.as_bytes())
-        .map_err(|e| format!("解密解压失败: {e}"))?;
+    let mut decoded =
+        bin_loader::parse_and_decompress_payload(payload, actual_signature.as_bytes())
+            .map_err(|e| format!("解密解压失败: {e}"))?;
     if !decoded.expected_signature.is_empty()
         && !timing_safe_eq(
             actual_signature.as_bytes(),
             decoded.expected_signature.as_bytes(),
         )
     {
+        if let Some((_, key)) = decoded.xop_pvm2.as_mut() {
+            xop_pvm2::wipe_key(key);
+        }
         android_log_warn(env, "sg");
         return Err("e4".to_string());
     }
-    if let Some((code, key)) = decoded.xop_pvm2.as_ref() {
+    if let Some((code, key)) = decoded.xop_pvm2.as_mut() {
         xop_pvm2::initialize(code, key)?;
     }
     assets_pas2::initialize(decoded.assets_pas2_key)?;

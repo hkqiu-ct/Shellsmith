@@ -189,7 +189,7 @@ shield protect-ios \
 shield protect -i input.apk -o protected.apk
 ```
 
-保护级别和 AI 静态语义恢复抵抗强度可以独立选择：
+保护级别和载荷压缩选项可以独立选择；后者当前沿用 `ai-resistance` 参数名：
 
 ```bash
 shield protect -i input.apk -o protected.apk \
@@ -200,7 +200,7 @@ shield protect -i input.apk -o protected.apk \
 - `compat`：优先兼容 API 19–36，关闭高风险高级变换。
 - `balanced`：默认策略。未提供 Xop 参数时显示 `xop-contract-only`；显式启用嵌入式 PVM2 时显示 `xop-pvm2-embedded`。
 - `strict`：要求真实嵌入式 Xop PVM2。GUI 默认使用安装包内置的 Packer，只需提供至少一个自有业务类前缀；CLI 仍需显式传入 Packer 路径。严格模式同时启用资源路径缩短、同类型资源 ID 重排、PAS2 分块认证加密和符合安全策略的业务 ELF 函数区域选择性加密。资源 ID 若出现在 Native/opaque 数据或 packed-switch 中会自动固定；PAS2 会改写可识别的 `AssetManager.open/openFd/getAssets`，以 DEX/ELF 中的路径或目录常量覆盖常见动态拼接，并通过应用私有 overlay 支持常见 Native `AAssetManager` 读取。缺少必要条件会在变换前失败关闭。该状态为 `xop-pvm2-embedded`，不代表 Hollow、LLVM Native VMP 或完整 Xop RASP 已融合。
-- `ai-resistance` 支持 `off`、`balanced`、`high`，映射为 DEXB v6 的 1/2/3 层 Zstandard 认证载荷。它与可选的 PVM2 方法虚拟化是两层能力：前者提高载荷静态恢复成本，后者让选定方法由 Native 解释器执行。两者都不能替代服务端授权和密钥保护。
+- `ai-resistance` 支持 `off`、`balanced`、`high`，映射为 DEXB v6 认证载荷中的 1/2/3 层 Zstandard 压缩。层数不改变包内密钥可离线恢复的边界，也不能作为已验证的抗 AI 语义恢复能力。可选的 PVM2 方法虚拟化让成功转换的方法由 Native 解释器执行，需要单独核验覆盖范围。两者都不能替代服务端授权和密钥保护。
 
 将 Xop PVM2 嵌入 Shellsmith 单 Stub（不引入第二个 Application/JNI 壳）：
 
@@ -213,9 +213,9 @@ shield protect -i input.apk -o protected.apk \
 
 可重复传入 `--xop-true-vmp-prefix`。前缀必须指向自有业务类，建议先从少量纯业务方法开始，避免把 Activity、Application、框架回调和大型 SDK 全包虚拟化。所选 Runtime 必须声明 `xop_pvm2=true`；API19 资源不支持此能力并会在变换前拒绝。
 
-GUI 安装包已经内置 Xop PVM2 Packer：Packer 路径留空即使用内置版本，无需额外选择文件；“选择自定义 Packer JAR”会覆盖内置版本，“恢复使用内置 Packer”可随时切回。自定义 JAR 会以当前用户权限在本机执行，因此必须来自可信来源，并兼容 `pvm2-transform` 与 code.bin v6 契约；输出仍会由核心验证。业务类前缀仍需在“调整设置 → Xop PVM2 方法虚拟化”中用逗号填写。严格模式要求 PVM2 成功覆盖率至少达到 70%，并输出选中、尝试、成功、跳过原因及未覆盖指令统计；低于门槛会失败关闭。严格代码保护只有在标准运行时、Java 17+、可用 Packer 和有效前缀都就绪时才允许开始；路径和业务类名不会出现在脱敏诊断摘要中，摘要只记录 PVM2 是否已配置。
+GUI 安装包已经内置 Xop PVM2 Packer：Packer 路径留空即使用内置版本，无需额外选择文件；“选择自定义 Packer JAR”会覆盖内置版本，“恢复使用内置 Packer”可随时切回。自定义 JAR 会以当前用户权限在本机执行，因此必须来自可信来源，并兼容 `pvm2-transform`、code.bin v4 容器、PVM2 v8 镜像及 schema 2 方法报告契约（当前运行时也可读取 v7 旧镜像）；输出仍会由核心验证。业务类前缀可在“调整设置 → Xop PVM2 方法虚拟化”中用逗号填写，也可仅提供关键方法清单。严格模式要求 PVM2 转换成功率至少达到 70%，并输出选中、尝试、成功、跳过原因及未覆盖指令统计；低于门槛会失败关闭。该比率为成功数除以尝试数，部分提前跳过的方法不进入分母，不能据此声称全部业务或关键方法已获得保护。严格代码保护只有在标准运行时、Java 17+、可用 Packer 和有效选择范围都就绪时才允许开始；路径和业务类名不会出现在脱敏诊断摘要中，摘要只记录 PVM2 是否已配置。
 
-PVM2 v6 已支持普通/复杂条件分支、`switch`、异常表与 `throw`、对象/原始数组、标准反射调用所需的 invoke 路径，以及 `monitor-enter/exit` 同步语义。每次构建会改变虚拟 Opcode、虚拟寄存器映射、立即数编码、Handler 顺序，并从三套 Dispatcher 模板中选择一套；覆盖报告中的 `isa` 可用于确认变体。仍不满足契约的方法（例如个别 `invoke-custom`/`invoke-polymorphic`、超出寄存器或代码预算的方法）必须记入跳过原因，不能当作成功。
+PVM2 自 v7 起已支持普通/复杂条件分支、`switch`、异常表与 `throw`、对象/原始数组、标准反射调用所需的 invoke 路径，以及 `monitor-enter/exit` 同步语义。每次构建会改变虚拟 Opcode、虚拟寄存器映射、立即数编码、Handler 顺序，并从三套 Dispatcher 模板中选择一套；覆盖报告中的 `isa` 可用于确认变体。仍不满足契约的方法（例如个别 `invoke-custom`/`invoke-polymorphic`、超出寄存器或代码预算的方法）必须记入跳过原因，不能当作成功。
 
 为保证音频/视频拖动和解码器状态，内置 Packer 会把播放器、解码器、音频/波形类及其 Kotlin/R8 合成访问器整体留在 ART；RecyclerView 适配器、Widget/View/Binding、资源/文件 Helper（兼容历史包名中的 `hepler`）也留在 ART，避免空接收者、回调和资源 ID 语义被 PVM2 改写。报告会以 `compatibility` 记录这些跳过项。资源 PAS2 同样默认跳过常见音视频扩展名，避免把需要随机访问的媒体流包装成只读顺序流。
 
@@ -223,11 +223,15 @@ PVM2 v6 已支持普通/复杂条件分支、`switch`、异常表与 `throw`、�
 
 业务 `.so` 的 APK 后处理层是“按库策略选择 + ELF 符号函数边界静态加密 + PSO2 认证密钥表 + 私有目录按函数区域解密加载”，能够提高直接静态反汇编成本。任一 ABI 缺少安全函数符号、含不安全重定位、超预算或属于系统/壳/高风险运行库时，整个同名库会跳过并计入报告，避免只加密部分 ABI。它仍是函数粒度的静态保护。
 
-需要真实 Native VMP 时，使用 [`native-vmp`](../native-vmp/README.md) 接入业务 CMake/NDK 编译链：显式 `MOCIKA_VMP` 函数会在 LLVM bitcode 阶段变为自定义 VM 字节码，原函数体替换为解释器入口；不支持的已标注语义会编译失败。当前真实子集覆盖最多 64 位的整数参数/返回、算术/位运算、比较、分支、循环、PHI、`select` 和整数转换；指针/内存、浮点、外部调用、异常、原子与同步仍不在子集内。它不能对 APK 中已有的第三方 ELF 补做 VMP，但可以先对有源码的业务函数做 VMP，再由 strict PSO2 保护最终 `.so`。
+v8 新增经认证的声明参数类型表，修复把 `Object` 传入的 `Integer`、`Long` 等包装引用误拆箱的问题。非空推导同时覆盖真实异常边和 `instanceof` 成功分支。新产物须配套当前 Packer 与标准运行时，旧 APK 需要重新加固才能获得修复。
+
+关键方法清单中的方法采用 `clear_after_use`：最后一个递归或并发调用退出后，立即覆写并释放解析出的代码、字符串池和映射等明文；异常退出同样清理，下次调用重新认证解密。普通转换方法采用 `bounded_cache`，默认最多保留 32 个方法、8 MiB 自有明文存储；在用方法可暂时超出预算。策略随 PVM2 v7 镜像一起加密认证，不由外部报告控制。schema 2 报告的 `plaintext_policy` 记录实际核验结果，跳过方法为 `null`。旧打包器、旧运行时或缺少版本声明的资源包会被拒绝，请先执行 `make build-stub`。这会增加必保热点方法的重复解密成本，仍需在目标设备测量；清理不覆盖交给业务的 Java 对象，也不意味着运行中无法观察明文。
+
+需要真实 Native VMP 时，使用 [`native-vmp`](../native-vmp/README.md) 接入业务 CMake/NDK 编译链：显式 `MOCIKA_VMP` 函数会在 LLVM bitcode 阶段变为自定义 VM 字节码，原函数体替换为解释器入口；不支持的已标注语义会编译失败。当前真实子集覆盖最多 64 位的整数和 float/double 参数/返回、算术/位运算、比较、分支、switch、循环、PHI、`select`、标量类型转换、整数 min/max 和融合乘加；指针/内存、通用外部调用、严格浮点环境、半精度/向量、异常、原子与同步仍不在子集内。它不能对 APK 中已有的第三方 ELF 补做 VMP，但可以先对有源码的业务函数做 VMP，再由 strict PSO2 保护最终 `.so`。
 
 GUI 的系统推荐默认值是“标准运行时 + 兼容环境保护 + balanced 代码保护 + balanced AI”，无需配置 PVM2 即可直接加固。高级设置会持久化；若上次保存了尚未配置完整的 strict 设置，主卡片会显示“使用推荐默认值（可直接加固）”，点击后恢复可用的推荐方案。该操作是显式切换，不会把 strict 静默降级。
 
-“第几代”没有统一行业标准。按本项目内部能力分层，当前 strict 标准运行时仍标为 **3.5 代工程能力**：单 Stub、Java/Kotlin 方法级 PVM2、构建级多态、资源/asset、业务 ELF 函数区域保护，以及可选的源码级整数语义 Native VMP 已形成可运行链路；但 Native VMP 尚未覆盖通用 C/C++ 内存/调用/异常语义，Play 内测和 Android 5～16 全设备矩阵也尚未完成，因此不能宣传为完整第四代，不能把本地结构验证算成真实设备或 Play 证据。
+“第几代”没有统一行业标准。当前能力应按实际范围描述：基础 DEX 加密封装、成功转换方法的 PVM2、构建级多态、资源/asset 与业务 ELF 静态保护，以及可选的源码级标量语义 Native VMP。不能把这些组件的存在等同于整个 APK 达到“3.5 代”。[代码保护升级方案](design/android-code-protection-upgrade.md)把“3.5 代”作为待验收的内部目标，要求关键方法清单、最终产物核验与运行时/性能证据；关键方法清单、产物核验、运行时清理和 Native 构建证据接入已实现，完整设备语义与性能矩阵仍待完成。Native VMP 的通用 C/C++ 语义、Play 内测也未完成，不能把本地结构验证算成真实设备或 Play 证据。
 
 AAB 预检不会把 APK 解包器误用于 AAB：
 
@@ -514,3 +518,81 @@ DEX 文件经 Zstd 压缩后体积通常会明显减小；`high` 会再增加压
 以下截图使用当前 Shellsmith 界面，具体选项以当前版本为准。
 
 ![Shellsmith 当前加固页](assets/screenshots/readme-protect-main.png)
+
+
+### PVM2 关键方法与验收报告
+
+类前缀选择可以继续使用，也可以通过 `--pvm2-required-methods methods.tsv` 单独指定必保方法。UTF-8 清单允许空行和 `#` 注释，模块名与签名之间使用一个制表符：
+
+```text
+base	Lcom/acme/license/Verifier;->verify([B)Z
+feature_rules	Lcom/acme/rules/Calculator;->score(II)I
+```
+
+普通 APK 的模块名为 `base`；AAB 填实际模块名。方法签名必须与待处理 DEX 一致（包括 R8 后名称、参数及返回类型），示例不能直接代替项目清单。重复、格式错误、模块/方法未命中、不能转换或产物核验失败都会终止。清单与类前缀取并集，必保方法必须全部通过，其他方法的跳过原因保留在报告中。
+
+```bash
+shield protect --input input.apk --output protected.apk \
+  --xop-pvm2-packer tools/xop-pvm2-packer.jar \
+  --pvm2-required-methods methods.tsv
+```
+
+`protect-aab` 接受同一参数，其他 AAB 签名/工具参数保持原用法。GUI 在 PVM2 设置中选择“关键方法清单”。API19 兼容资源仍不支持 PVM2。
+
+启用 PVM2 的成功输出旁会生成 `protected.apk.protection.json` 或 `protected.aab.protection.json`。统计分别展示转换成功率、选中方法覆盖率、原始指令字节覆盖率和必保方法覆盖率；未声明必保方法时该指标为 `null`，不记为 100%。这些百分比仅针对选择范围，不代表整个应用。报告包含逐方法原因、最终索引与产物摘要，不包含密钥或明文镜像，也不进入安装包。
+
+选择范围在兼容性过滤**之前**统计。前缀命中的 UI/导航、生成桥接和数据/资源基础设施方法仍计入分母，分别记录 `ui_runtime_glue`、`compiler_generated_bridge`、`data_resource_runtime_glue`，保持 ART 执行。不能用排除这些方法之后的候选数量作为整个前缀的覆盖率分母；精确必保清单只对该清单负责，不表示应用的关键业务已经全部识别。升级前的报告可能遗漏这三类排除项，完整前缀的覆盖率需用新打包器重新生成。
+
+使用 `shield sign` 或 GUI 自动签名时，公共签名流程会重新比对 DEX 并更新最终文件摘要。另用外部签名工具会改变文件摘要，原报告不再对应签名后的文件。报告为本地构建记录，不是不可伪造的安全认证。新能力要求从当前源码重建的 Packer（`make build-pvm2`），旧 JAR 即使镜像版本相同也会被明确拒绝。
+
+### Native VMP 构建证据与通用接入
+
+有 C/C++ 源码的项目先按 [Native VMP SDK](../native-vmp/README.md) 接入业务构建，再用
+`--native-vmp-evidence native-evidence.tsv` 将链接报告与待加固库绑定。该参数不会对已有
+第三方二进制补做虚拟化。UTF-8 清单每行两列，中间为真实制表符：
+
+```text
+base/lib/arm64-v8a/libbusiness.so	build/arm64-v8a/libbusiness.so.native-vmp.json
+feature_rules/lib/x86_64/librules.so	build/x86_64/librules.so.native-vmp.json
+```
+
+APK 只填 `base`，AAB 填实际模块；不同 ABI 各用对应报告。报告路径相对清单目录解析，
+也可用绝对路径。要求 SDK schema 2 链接报告，旧报告需要重新生成。重复/缺失条目、
+错误 ABI、修改过的库和排除必验 ABI 均会终止。
+
+```bash
+shield protect --input input.apk --output protected.apk \
+  --native-vmp-evidence native-evidence.tsv
+```
+
+APK 的 `shield-cli.toml` 可在 `[protect]` 设置 `native_vmp_evidence`，相对配置路径基于
+配置文件目录。`protect-aab --engine mocika` 同样接受此参数；多模块仍要求既有 strict、
+PVM2 与模块覆盖条件。GUI 的 APK/AAB 页均提供“Native 构建证据清单（可选）”选择入口。
+普通 APK 可只核验 Native 证据而不启用 PVM2；叠加 PSO2 时沿用 strict + PVM2 配置。
+
+统一 `.protection.json` 的 `native_vmp` 记录输入、输出库及构建报告摘要。PSO2 改写库时
+必须通过完整还原核验，并绑定密钥表摘要。后续打包、AAB 重组和 Shellsmith 签名重新比对
+这些产物。清单以外的库不算 Native VMP 覆盖；构建核验成功仍保留
+`execution=not_recorded`，设备执行结果须独立验证。
+
+详细范围、运行时待办和设备验收见 [代码保护升级方案](design/android-code-protection-upgrade.md)。
+
+### 自动离线项目身份
+
+首次加固时，Shellsmith 按“应用包名 + 运行时绑定证书 SHA-256”自动创建本机项目种子。
+以后 GUI、CLI 和 AAB 加固自动复用这个身份，每次构建再用独立随机盐和 HKDF-SHA256
+派生构建材料，用于既有 DEX、资源、SO 与 PVM2 保护链路。无需联网、选择密钥文件或
+给手机导入激活资料。APK 的 `.protection.json` 会记录公开项目身份、构建盐和交付模式，
+不记录项目种子。LLVM Native VMP 仍需上述源码接入，不会因为有项目身份而自动覆盖预编译 SO。
+
+在“设置 → 项目专属保护”可以查看项目身份与证书，并导出或恢复备份。
+种子按既有 `enc:v1` 方案存入应用数据目录的 `shield.db`，不写入源码仓库；macOS 默认路径为
+`~/Library/Application Support/dev.mocika.shield-gui/`。并发首次加固只创建一个身份，损坏记录会
+终止构建，不会悄悄生成替代种子。同身份的有效备份可修复损坏密文；无法识别身份的记录
+仍会拒绝覆盖。换电脑后，先恢复备份即可沿用同一身份。
+备份包含私有种子，不能公开或提交到 Git；导出拒绝覆盖已有文件，恢复拒绝覆盖同一包名和
+证书下的不同身份。存储加密沿用本地账户/路径派生机制，不抵抗已控制电脑账户的攻击者。
+
+这里采用“手机安装即用”的交付方式：独立项目种子不随 APK 分发，但运行所需的派生材料
+仍有包内恢复路径。项目隔离与每次构建变化不代表 APK 不可静态还原，也不代表全部方法
+已虚拟化；覆盖和抗还原效果仍需按每个实际产物核验。

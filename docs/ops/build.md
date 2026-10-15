@@ -21,15 +21,27 @@
 ## 快速开始（Makefile）
 
 ```bash
-make build-stub             # ① 构建 Android 壳（必须最先执行）
+make build-stub             # ① 从源码重建 Packer，再构建 Android 壳
 make build-cli              # ② 编译 shield 命令行工具
 make build-gui              # ③ 构建桌面 GUI Tauri 版（需先 build-stub）
 make build-all              # build-stub + build-cli + build-gui（Tauri）
 make test                   # 运行 Android 核心、iOS 核心、CLI 单元测试
+make test-pvm2              # 从源码重建并验证通用 DEX 方法保护
 make clean                  # 清理所有构建产物
 ```
 
 > **构建顺序约束**：`shield`（CLI）和 GUI 运行时均依赖 `resources.zip`，必须先执行 `make build-stub`。
+
+日常释放磁盘空间时，不要直接使用 `make clean` 或 `cargo clean`：当前验收 APK、逐产物
+报告、设备测量和本机 `.app` 也保存在 `target/`，整体清理会一起删除。确认没有构建正在
+执行后，可以清理各 Cargo 构建配置目录下的 `incremental/`、`deps/`、`build/` 和
+`.fingerprint/`；这些缓存可重新生成，下次编译会变慢。保留最终二进制及其 `tools/`、
+`resources/`、`licenses/`、`bundle/`，并保留 `shield-stub/build/outputs/resources/`
+及仍需复核的验收目录。`node_modules/` 是本机开发依赖，有继续开发需求时不必删除。
+
+源码、测试样本、`third_party/`、`tools/` 和历史设计文档不能仅凭目录名称判定无用；删除
+前须检查构建、运行及文档引用。应用数据目录中的 `shield.db`、`config.toml`、证书和
+项目保护备份不属于构建缓存。
 
 iOS 代码本身可以在没有完整 Xcode 时编译和执行静态检查；只有 `protect-ios` 的 Archive/Export 阶段需要在 macOS 选择完整 Xcode：
 
@@ -59,7 +71,8 @@ make build-stub
 
 壳运行时（静态链入的 Xop PVM2 解释器）直接编译仓库内的 `third_party/xopprotector/native/src/main/cpp`，
 不需要检出外部仓库。该目录同时保存了内置打包器 `tools/xop-pvm2-packer.jar` 的 Java 源码，
-两者因此始终同源；若要用更新版本的 XopProtector 覆盖，设置 `MOCIKA_XOP_ROOT` 指向新的检出即可，
+使用 `make build-pvm2` 重建打包器，`make build-stub` 已将它作为前置步骤。打包器构建复用 `tools/xop-pvm2-packer.jar` 中锁定摘要的外部依赖，但全部 `com/yqsh/` 类由当前源码重编译。`python3 scripts/build_pvm2_packer.py --check` 可核对分发 JAR；旧 JAR 的来源信息不能由同一个镜像版本替代。
+若要用更新版本的 XopProtector 覆盖，设置 `MOCIKA_XOP_ROOT` 指向新的检出即可，
 但必须同时确认内置打包器与该检出同源（发布流程会校验两侧的镜像格式版本）。
 
 首次执行前需添加 Android Rust 编译目标：

@@ -13,7 +13,7 @@ else
   CLEAN_CMD      := rm -rf
 endif
 
-.PHONY: build-cli build-stub audit-stub-dex build-gui build-all \
+.PHONY: build-pvm2 test-pvm2 test-pvm2-runtime build-cli build-stub audit-stub-dex build-gui build-all \
         release release-linux release-windows \
         release-macos release-macos-universal \
         bump-version test test-fusion test-native-vmp check-aab clean help
@@ -21,6 +21,9 @@ endif
 help:
 	@echo "用法: make <目标>"
 	@echo ""
+	@echo "  build-pvm2             从仓库 Java 源码重建 PVM2 打包器（JDK 17+）"
+	@echo "  test-pvm2              从源码构建并执行通用 DEX 方法验证"
+	@echo "  test-pvm2-runtime      检查 Native 明文生命周期、并发与 JNI 执行"
 	@echo "  build-cli              编译 shield-cli（当前平台 release）"
 	@echo "  build-stub             构建 shield-stub（Android AAR + 资源包）"
 	@echo "  audit-stub-dex         输出 Stub DEX 指标并检查膨胀上限（需先 build-stub）"
@@ -43,7 +46,17 @@ build-cli:
 	cargo build --release -p shield-cli
 	@echo "✅ 产物: $(CLI_BIN)"
 
-build-stub:
+build-pvm2:
+	$(PYTHON) scripts/build_pvm2_packer.py
+
+test-pvm2:
+	$(PYTHON) tests/scripts/check-pvm2-packer.py
+
+test-pvm2-runtime:
+	$(PYTHON) tests/scripts/check-pvm2-runtime.py
+	cargo test --manifest-path shield-stub/src/main/rust/Cargo.toml xop_pvm2
+
+build-stub: build-pvm2
 	@echo "🤖 构建 shield-stub..."
 	$(BUILD_STUB_CMD)
 

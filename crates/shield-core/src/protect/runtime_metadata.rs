@@ -17,7 +17,7 @@ pub(crate) struct RuntimeMetadata {
     pub(crate) memory_dex: bool,
     pub(crate) xop_pvm2: bool,
     /// 壳运行时静态链入的 Xop 解释器支持的最高 PVM2 镜像格式版本。
-    /// 旧资源包没有该字段，此时为 None 并跳过版本比对。
+    /// 旧资源包没有该字段时为 None；启用 PVM2 必须重建资源包。
     pub(crate) xop_pvm2_format: Option<u32>,
     pub(crate) xop_vm_bridge: Option<String>,
     pub(crate) xop_vm_bridge_method: Option<String>,
