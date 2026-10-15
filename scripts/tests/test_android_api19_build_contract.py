@@ -40,8 +40,10 @@ class AndroidApi19BuildContractTests(unittest.TestCase):
         self.assertIn("if: needs.changes.outputs.run_checks == 'true'", ci)
         self.assertIn("name: 基础快速检查", ci)
         self.assertIn("name: 完整代码质量检查", ci)
+        quality = ci.split("\n  full-quality:\n", 1)[1].split("\n  linux-gui-bundle:\n", 1)[0]
+        self.assertNotRegex(quality, r"(?m)^    if:", "完整质量检查必须覆盖 PR，不能等合并后才检查")
         self.assertGreaterEqual(
-            ci.count("if: github.event_name == 'workflow_dispatch'"), 5
+            ci.count("if: github.event_name == 'workflow_dispatch'"), 4
         )
         self.assertNotIn("run_android_stub", ci)
         self.assertNotIn("run_linux_gui", ci)

@@ -151,7 +151,6 @@ jobs:
 
   full-quality:
     name: 完整代码质量检查
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-24.04
 
     steps:
