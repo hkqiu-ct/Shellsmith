@@ -1151,7 +1151,7 @@ mod tests {
         );
         for (kind, expected, count) in [
             ("native", Pvm2SkipReason::NoCode, 2),
-            ("ui", Pvm2SkipReason::UiRuntimeGlue, 3),
+            ("ui", Pvm2SkipReason::CompatibilityVirtualContract, 3),
             ("registers", Pvm2SkipReason::RegisterLimit, 3),
         ] {
             let dex = work.path().join(format!("zero-{kind}/dex"));
