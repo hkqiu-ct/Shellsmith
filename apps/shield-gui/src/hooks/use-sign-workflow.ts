@@ -126,10 +126,12 @@ export function useSignWorkflow({
         sharing: sharingChoice,
       });
       await api.deleteFile(`${outputPath}.idsig`).catch(() => undefined);
+      setFinishedAt((previous) => previous ?? Date.now());
       setState("done");
       notifySuccess(t(locale, "signDone"));
     } catch (err) {
       const message = String(err);
+      setFinishedAt((previous) => previous ?? Date.now());
       setError(message);
       notifyError(message);
       setState("failed");

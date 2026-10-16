@@ -343,7 +343,7 @@ export type TaskSnapshot = {
 export type Pvm2FailureSummary = {
   selected_classes: number;
   selected_methods: number;
-  reasons: Partial<Record<"no_code" | "initializer" | "ui_runtime_glue" | "data_resource_runtime_glue" | "compiler_generated_bridge" | "playback_compatibility" | "nullable_receiver" | "unsupported_opcode" | "register_limit" | "code_size_limit" | "exception_mapping" | "control_flow" | "type" | "not_attempted" | "other", number>>;
+  reasons: Partial<Record<"no_code" | "initializer" | "ui_runtime_glue" | "data_resource_runtime_glue" | "compiler_generated_bridge" | "playback_compatibility" | "compatibility_virtual_contract" | "compatibility_synchronization" | "compatibility_exception_region" | "compatibility_non_leaf_instruction" | "nullable_receiver" | "unsupported_opcode" | "register_limit" | "code_size_limit" | "exception_mapping" | "control_flow" | "type" | "not_attempted" | "other", number>>;
 };
 
 export type DragDropPayload = {

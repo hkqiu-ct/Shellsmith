@@ -229,6 +229,7 @@ export function AabProtectPage({
       notifySuccess(t(locale, "aabProtectCompleted"));
     } catch (cause) {
       const message = String(cause);
+      setFinishedAt((previous) => previous ?? Date.now());
       setError(message);
       setState("failed");
       notifyError(message);

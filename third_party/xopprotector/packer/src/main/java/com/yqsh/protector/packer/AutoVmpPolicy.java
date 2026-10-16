@@ -133,39 +133,33 @@ public final class AutoVmpPolicy {
         if (reason == null && PlaybackCompatibility.keepOnArt(owner.getType(), method.getName()))
             reason = "playback_compatibility";
         if (reason == null) return null;
-        return isIndependentCalculation(owner, method) ? null : reason;
+        if (method.getImplementation() == null || method.getName().startsWith("<")) return reason;
+        String restriction = independentMethodRestriction(owner, method);
+        return restriction == null ? null : reason + ":" + restriction;
     }
 
-    private static boolean isIndependentCalculation(ClassDef owner, Method method) {
+    private static String independentMethodRestriction(ClassDef owner, Method method) {
         int flags = method.getAccessFlags();
         var code = method.getImplementation();
-        if (code == null || method.getName().startsWith("<") || !code.getTryBlocks().isEmpty()
-                || (flags & (0x20 | 0x20000)) != 0) return false;
+        if ((flags & (0x20 | 0x20000)) != 0) return "synchronization";
+        if (!code.getTryBlocks().isEmpty()) return "exception_region";
         // 私有/静态方法不覆盖框架回调；其它实例方法仅放行无继承/接口契约的普通类。
         // ponytail: 未解析外部及跨 DEX 父类的回调契约，保守保留其虚方法；扩展需完整继承图验证。
         if ((flags & (0x2 | 0x8)) == 0 && (!"Ljava/lang/Object;".equals(owner.getSuperclass())
                 || !owner.getInterfaces().isEmpty() || method.getName().equals("hashCode")
-                || method.getName().equals("finalize"))) return false;
-        if (!primitive(method.getReturnType(), true)) return false;
-        for (CharSequence parameter : method.getParameterTypes())
-            if (!primitive(parameter.toString(), false)) return false;
-        // ponytail: 命名兼容排除仅放行无对象/字段/数组/外部调用的数值叶子方法；其余语义仍由 ART 执行。
-        // 后续扩展须先证明对象状态与框架调用语义，不能直接移除包路径或类名规则。
+                || method.getName().equals("finalize"))) return "virtual_contract";
+        // ponytail: 仅放行无状态访问、外部调用的叶子方法；引用参数、透传与比较复用已有类型化运行时。
+        // 字段、数组元素、调用等仍留在 ART；扩展需验证对象状态与框架语义，不能直接移除命名规则。
         for (var instruction : code.getInstructions()) {
             Opcode opcode = instruction.getOpcode();
             if (opcode == Opcode.PACKED_SWITCH_PAYLOAD || opcode == Opcode.SPARSE_SWITCH_PAYLOAD) continue;
             Short value = OPCODES.getOpcodeValue(opcode);
-            if (value == null) return false;
+            if (value == null) return "non_leaf_instruction";
             int op = Short.toUnsignedInt(value);
-            if (!(op <= 0x06 || (op >= 0x0e && op <= 0x10) || (op >= 0x12 && op <= 0x19)
-                    || (op >= 0x28 && op <= 0x3d) || (op >= 0x7b && op <= 0xe2))) return false;
+            if (!(op <= 0x09 || (op >= 0x0e && op <= 0x11) || (op >= 0x12 && op <= 0x19)
+                    || (op >= 0x28 && op <= 0x3d) || (op >= 0x7b && op <= 0xe2))) return "non_leaf_instruction";
         }
-        return true;
-    }
-
-    private static boolean primitive(String type, boolean allowVoid) {
-        return type != null && type.length() == 1
-                && ((allowVoid && type.equals("V")) || "ZBSCIJFD".indexOf(type.charAt(0)) >= 0);
+        return null;
     }
 
     /** 兼容性排除只影响执行准入，不能从用户选择范围的覆盖率分母中消失。 */

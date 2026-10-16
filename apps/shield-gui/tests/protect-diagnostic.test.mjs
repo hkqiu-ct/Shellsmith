@@ -46,3 +46,15 @@ test("普通预检不混入上一任务的失败统计", () => {
     xopPvm2Configured: false, currentStep: "", failed: false, pvm2Failure: failure });
   assert.doesNotMatch(text, /PVM2_ZERO_METHODS/);
 });
+
+test("兼容限制按方法实际阻断条件统计，不再全部显示为生命周期", () => {
+  const text = buildPvm2FailureDiagnostic({ selected_classes: 3, selected_methods: 21,
+    reasons: { initializer: 3, compatibility_virtual_contract: 6, compatibility_synchronization: 2,
+      compatibility_exception_region: 3, compatibility_non_leaf_instruction: 7 } }, "zh");
+  assert.match(text, /所选方法数: 21/);
+  assert.match(text, /继承\/接口虚方法契约未验证\): 6/);
+  assert.match(text, /同步方法\): 2/);
+  assert.match(text, /含异常处理区\): 3/);
+  assert.match(text, /白名单之外的指令\): 7/);
+  assert.doesNotMatch(text, /生命周期|统计无效/);
+});

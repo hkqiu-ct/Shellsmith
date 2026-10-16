@@ -102,6 +102,10 @@ public final class Pvm2Admission {
             return SkipReason.other;
         }
         String r = failReason.toLowerCase(Locale.US);
+        // 方法限制细分不改变兼容预筛与编译尝试的统计口径。
+        if (r.startsWith("ui_runtime_glue:") || r.startsWith("data_resource_runtime_glue:")
+                || r.startsWith("playback_compatibility:") || r.startsWith("compiler_generated_bridge:"))
+            return SkipReason.compatibility;
         if (r.contains("unsupported opcode 0x")) {
             return SkipReason.unsupported_opcode;
         }
