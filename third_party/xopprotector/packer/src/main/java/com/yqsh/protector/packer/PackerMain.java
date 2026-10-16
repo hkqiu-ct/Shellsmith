@@ -2112,7 +2112,7 @@ public class PackerMain {
             String reason = pvm2Exclusions.get(key);
             // 保持原转换成功率口径：类兼容预筛不算编译尝试；媒体准入失败仍计入。
             // 完整选择范围的覆盖率由逐方法报告统计，不能在这里删除跳过项。
-            if (reason.equals("playback_compatibility")) {
+            if (reason.equals("playback_compatibility") || reason.startsWith("playback_compatibility:")) {
                 pvm2Admission.noteCandidate();
                 pvm2Admission.noteFail(reason);
             }
@@ -2140,11 +2140,9 @@ public class PackerMain {
 
         byte[] returnBytes = getReturnByteCodes(returnType);
         int byteSize = units.length * 2;
-        if (byteSize < returnBytes.length) {
+        // PVM2 由 DexPool 整体替换方法体，不受旧式原地回填的最小长度限制。
+        if (phase == ExtractPhase.HOLLOW_OR_VMP && byteSize < returnBytes.length) {
             if (methodReport != null) methodReport.skipped(key, "code_too_short");
-            if (phase == ExtractPhase.TRUE_VMP_ONLY) {
-                pvm2Admission.noteCandidate();
-            }
             return null;
         }
 
@@ -2170,8 +2168,7 @@ public class PackerMain {
                         + ": " + compiled.failReason);
                 return null;
             }
-            // Stub until DexPool trampoline rewrite replaces the code item.
-            writeReturnStub(raf, insnsOffset, returnBytes, byteSize);
+            // 保持输入 DEX 有效，随后整体写入并核验跳板；不能向短方法越界写占位代码。
             toEncrypt = compiled.image;
             if (methodReport != null) methodReport.compiled(key, compiled.image);
             plainSize = compiled.image.length;

@@ -80,14 +80,31 @@ public final class Pvm2RuntimeImages {
         List<Code> receivers = new ArrayList<>();
         for (var cls : dex.classDefs()) for (var method : dex.readClassData(cls).allMethods()) receivers.add(dex.readCode(method));
         if (receivers.size() != 4) throw new AssertionError("接收者样本数量不符");
-        for (int i = 0; i < 57; i++) {
+        for (int i = 0; i < 72; i++) {
             int isa = i % 3;
             Code input = i < 6 ? code : new Code(1, 0, 0, 0, new short[]{0x0012, 0x0027},
                     new Code.Try[0], new Code.CatchHandler[0]);
             if (i >= 9 && i < 45) input = branchInput((i - 9) / 6, ((i - 9) / 3) % 2 != 0);
-            if (i >= 45) input = receivers.get((i - 45) / 3);
-            Pvm2Compiler.Result result = Pvm2Compiler.tryCompile(i >= 45 ? dex : null, input, "I", true,
-                    Pvm2Morph.fromIsa(isa, new SecureRandom()), i >= 3, i >= 54 ? new String[]{"Ljava/lang/Object;", "I"} : i >= 51 ? new String[]{"J", "D", "F", "Z", "I"} : i >= 45 ? new String[]{"Ljava/lang/Object;"} : i >= 9 ? new String[]{"I", "I"} : new String[0]);
+            if (i >= 45 && i < 57) input = receivers.get((i - 45) / 3);
+            String returnType = "I";
+            String[] parameters = i >= 54 ? new String[]{"Ljava/lang/Object;", "I"} : i >= 51 ? new String[]{"J", "D", "F", "Z", "I"} : i >= 45 ? new String[]{"Ljava/lang/Object;"} : i >= 9 ? new String[]{"I", "I"} : new String[0];
+            if (i >= 57) {
+                // 引用透传、空值选择、同一对象比较、null 判断及数组透传，覆盖三种 ISA。
+                int kind = (i - 57) / 3;
+                short[] units = switch (kind) {
+                    case 0, 4 -> new short[]{0x1007, 0x0011};
+                    case 1 -> new short[]{0x0139, 3, 0x0211, 0x0111};
+                    case 2 -> branchInput(0, false).getInstructions();
+                    default -> new short[]{0x0138, 4, 0x0012, 0x0228, 0x1012, 0x000f};
+                };
+                boolean pair = kind == 1 || kind == 2;
+                input = new Code(pair ? 3 : 2, pair ? 2 : 1, 0, 0, units, new Code.Try[0], new Code.CatchHandler[0]);
+                returnType = kind == 2 || kind == 3 ? "I" : kind == 4 ? "[I" : "Ljava/lang/Object;";
+                parameters = pair ? new String[]{"Ljava/lang/Object;", "Ljava/lang/Object;"}
+                        : new String[]{kind == 4 ? "[I" : "Ljava/lang/Object;"};
+            }
+            Pvm2Compiler.Result result = Pvm2Compiler.tryCompile(i >= 45 ? dex : null, input, returnType, true,
+                    Pvm2Morph.fromIsa(isa, new SecureRandom()), i >= 3, parameters);
             if (!result.isOk()) throw new AssertionError(result.failReason);
             Files.write(Path.of(args[0], "image" + i + ".bin"), result.image);
             Files.write(Path.of(args[0], "image" + i + ".gcm"),

@@ -333,6 +333,7 @@ export function useProtectWorkflow({
       notifySuccess(t(locale, "protectCompleted"));
     } catch (err) {
       const message = String(err);
+      setFinishedAt((previous) => previous ?? Date.now());
       setError(message);
       notifyError(message);
       setState("failed");

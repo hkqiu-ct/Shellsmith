@@ -126,7 +126,7 @@ public final class Pvm2ProtectionCheck {
             } else {
                 assert row.isNull("plaintext_policy"); skipped++;
                 if (row.getString("descriptor").startsWith("Lfixture/MainActivity;")) {
-                    assert row.getString("reason").equals("ui_runtime_glue"); excluded++;
+                    assert row.getString("reason").equals("ui_runtime_glue:virtual_contract"); excluded++;
                 } else assert row.getString("reason").equals("no_code");
             }
         }
@@ -235,7 +235,7 @@ public final class Pvm2ProtectionCheck {
                 reasons.merge(row.getString("reason"), 1, Integer::sum);
             }
             assert reasons.get("no_code") == 1 && reasons.get("initializer") == 1 : reasons;
-            if (kind.equals("ui")) assert reasons.get("ui_runtime_glue") == 1 : reasons;
+            if (kind.equals("ui")) assert reasons.get("ui_runtime_glue:virtual_contract") == 1 : reasons;
             if (kind.equals("registers")) assert reasons.get("too many regs") == 1 : reasons;
             System.out.println("零方法失败报告通过：" + kind + " " + reasons);
         }
@@ -261,8 +261,11 @@ public final class Pvm2ProtectionCheck {
     }
 
     private static void checkMethodCompatibility(Path root) throws Exception {
-        for (String reason : List.of("ui_runtime_glue", "data_resource_runtime_glue", "compiler_generated_bridge", "playback_compatibility"))
+        for (String reason : List.of("ui_runtime_glue", "data_resource_runtime_glue", "compiler_generated_bridge", "playback_compatibility")) {
             assert Pvm2Admission.classify(reason) == Pvm2Admission.SkipReason.compatibility;
+            for (String restriction : List.of("virtual_contract", "synchronization", "exception_region", "non_leaf_instruction"))
+                assert Pvm2Admission.classify(reason + ":" + restriction) == Pvm2Admission.SkipReason.compatibility;
+        }
         // 相同计算体不应因 UI、数据、资源、设备或媒体命名而整类消失。
         for (String type : List.of("Lfixture/ui/Rules;", "Lfixture/navigation/Rules;", "Lfixture/MainActivity;",
                 "Lfixture/adapter/Rules;", "Lfixture/QuoteView;", "Lfixture/RouteNavigator;",
@@ -282,27 +285,34 @@ public final class Pvm2ProtectionCheck {
         var staticMethod = calculation(type, "utility", 9);
         for (String parent : List.of("Landroid/app/Activity;", "Lfixture/BaseActivity;", "Lexternal/Unknown;")) {
             var cls = calculationOwner(type, parent, List.of(), List.of());
-            assert AutoVmpPolicy.exclusionReason(cls, publicMethod).equals("ui_runtime_glue");
+            assert AutoVmpPolicy.exclusionReason(cls, publicMethod).equals("ui_runtime_glue:virtual_contract");
             assert AutoVmpPolicy.exclusionReason(cls, privateMethod) == null;
             assert AutoVmpPolicy.exclusionReason(cls, staticMethod) == null;
         }
         var callback = calculationOwner(type, "Ljava/lang/Object;", List.of("Lexternal/Callback;"), List.of());
-        assert AutoVmpPolicy.exclusionReason(callback, publicMethod).equals("ui_runtime_glue");
+        assert AutoVmpPolicy.exclusionReason(callback, publicMethod).equals("ui_runtime_glue:virtual_contract");
         var plain = calculationOwner(type, "Ljava/lang/Object;", List.of(), List.of());
         for (int flags : List.of(0x29, 0x20009, 0x49, 0x1009))
             assert AutoVmpPolicy.exclusionReason(plain, calculation(type, "calculate", flags)) != null;
+        for (int flags : List.of(0x29, 0x20009))
+            assert AutoVmpPolicy.exclusionReason(plain, calculation(type, "calculate", flags)).equals("ui_runtime_glue:synchronization");
+        var caught = new ImmutableMethod(type, "caught", List.of(), "I", 9, Set.of(), Set.of(),
+                new ImmutableMethodImplementation(1, List.of(new ImmutableInstruction11n(Opcode.CONST_4, 0, 1),
+                        new ImmutableInstruction11x(Opcode.RETURN, 0), new ImmutableInstruction11x(Opcode.MOVE_EXCEPTION, 0),
+                        new ImmutableInstruction11n(Opcode.CONST_4, 0, 0), new ImmutableInstruction11x(Opcode.RETURN, 0)),
+                        List.of(new ImmutableTryBlock(0, 1, List.of(new ImmutableExceptionHandler(null, 2)))), List.of()));
+        assert AutoVmpPolicy.exclusionReason(plain, caught).equals("ui_runtime_glue:exception_region");
         for (String generated : List.of("Lfixture/Rules$$ExternalSyntheticLambda0;", "Lfixture/Rules$1;"))
             assert AutoVmpPolicy.exclusionReason(calculationOwner(generated, "Ljava/lang/Object;", List.of(), List.of()),
                     calculation(generated, "calculate", 9)).equals("compiler_generated_bridge");
         // 混淆类仍直接继承已知框架类型时，生命周期和接口回调保持原执行方式。
         var obfuscated = calculation("Lfixture/a;", "callback", 1);
-        assert AutoVmpPolicy.exclusionReason(calculationOwner("Lfixture/a;", "Landroid/app/Activity;", List.of(), List.of()), obfuscated).equals("ui_runtime_glue");
-        assert AutoVmpPolicy.exclusionReason(calculationOwner("Lfixture/a;", "Ljava/lang/Object;", List.of("Landroid/view/View$OnClickListener;"), List.of()), obfuscated).equals("ui_runtime_glue");
-        // 原始 opcode、对象类型、字段/数组访问、调用和锁都不能借纯计算规则放行。
+        assert AutoVmpPolicy.exclusionReason(calculationOwner("Lfixture/a;", "Landroid/app/Activity;", List.of(), List.of()), obfuscated).equals("ui_runtime_glue:virtual_contract");
+        assert AutoVmpPolicy.exclusionReason(calculationOwner("Lfixture/a;", "Ljava/lang/Object;", List.of("Landroid/view/View$OnClickListener;"), List.of()), obfuscated).equals("ui_runtime_glue:virtual_contract");
+        // 字段/数组元素访问、调用和锁仍不能借叶子方法规则放行。
         var field = new ImmutableFieldReference(type, "state", "I");
         var call = new ImmutableMethodReference(type, "external", List.of(), "I");
-        for (var instruction : List.of(new ImmutableInstruction12x(Opcode.MOVE_OBJECT, 0, 1),
-                new ImmutableInstruction21c(Opcode.SGET, 0, field), new ImmutableInstruction22c(Opcode.IGET, 0, 1, field),
+        for (var instruction : List.of(new ImmutableInstruction21c(Opcode.SGET, 0, field), new ImmutableInstruction22c(Opcode.IGET, 0, 1, field),
                 new ImmutableInstruction23x(Opcode.AGET, 0, 1, 2),
                 new ImmutableInstruction35c(Opcode.INVOKE_STATIC, 0, 0, 0, 0, 0, 0, call),
                 new ImmutableInstruction35c(Opcode.INVOKE_VIRTUAL, 1, 1, 0, 0, 0, 0, call),
@@ -310,12 +320,7 @@ public final class Pvm2ProtectionCheck {
                 new ImmutableInstruction21c(Opcode.NEW_INSTANCE, 0, new ImmutableTypeReference(type)))) {
             var method = new ImmutableMethod(type, "stateful", List.of(), "I", 9, Set.of(), Set.of(),
                     new ImmutableMethodImplementation(3, List.of(instruction, new ImmutableInstruction11x(Opcode.RETURN, 0)), List.of(), List.of()));
-            assert AutoVmpPolicy.exclusionReason(plain, method).equals("ui_runtime_glue") : instruction.getOpcode();
-        }
-        for (String reference : List.of("Ljava/lang/Object;", "[I")) {
-            var method = new ImmutableMethod(type, "objectArgument", List.of(new ImmutableMethodParameter(reference, Set.of(), null)),
-                    "I", 9, Set.of(), Set.of(), staticMethod.getImplementation());
-            assert AutoVmpPolicy.exclusionReason(plain, method).equals("ui_runtime_glue");
+            assert AutoVmpPolicy.exclusionReason(plain, method).equals("ui_runtime_glue:non_leaf_instruction") : instruction.getOpcode();
         }
 
         Path work = Files.createDirectory(root.resolve("method-compatibility"));
@@ -343,6 +348,38 @@ public final class Pvm2ProtectionCheck {
             else { assert row.getString("reason").equals("initializer"); initializers++; }
         }
         assert verified == 18 && initializers == 3;
+        // 使用实际编译、跳板及产物校验验证引用叶子方法，不能只测试策略返回值。
+        classes.clear();
+        for (String owner : List.of("Lfixture/ui/ReferenceRules;", "Lfixture/data/ObjectRepository;", "Lfixture/player/TrackRules;")) {
+            List<ImmutableMethod> methods = new ArrayList<>();
+            for (String reference : List.of("Ljava/lang/Object;", "Ljava/lang/Integer;", "Ljava/lang/String;", "[I", "[[Ljava/lang/Object;")) {
+                var parameter = List.of(new ImmutableMethodParameter(reference, Set.of(), null));
+                for (int flags : List.of(1, 2, 9)) {
+                    boolean isStatic = (flags & 8) != 0;
+                    methods.add(new ImmutableMethod(owner, "identity" + flags, parameter, reference, flags, Set.of(), Set.of(),
+                            new ImmutableMethodImplementation(isStatic ? 1 : 3,
+                                    isStatic ? List.of(new ImmutableInstruction11x(Opcode.RETURN_OBJECT, 0))
+                                    : List.of(new ImmutableInstruction12x(Opcode.MOVE_OBJECT, 0, 2),
+                                            new ImmutableInstruction11x(Opcode.RETURN_OBJECT, 0)), List.of(), List.of())));
+                }
+                methods.add(new ImmutableMethod(owner, "unused", parameter, "I", 9, Set.of(), Set.of(),
+                        new ImmutableMethodImplementation(2, List.of(new ImmutableInstruction31i(Opcode.CONST, 0, 42),
+                                new ImmutableInstruction11x(Opcode.RETURN, 0)), List.of(), List.of())));
+            }
+            // D8 可将参数透传缩成单条 return；基本类型和宽值也不能被原地回填限制误排除。
+            for (String primitive : List.of("Z", "B", "S", "C", "I", "J", "F", "D")) {
+                boolean wide = primitive.equals("J") || primitive.equals("D");
+                methods.add(new ImmutableMethod(owner, "shortReturn", List.of(new ImmutableMethodParameter(primitive, Set.of(), null)),
+                        primitive, 9, Set.of(), Set.of(), new ImmutableMethodImplementation(wide ? 2 : 1,
+                                List.of(new ImmutableInstruction11x(wide ? Opcode.RETURN_WIDE : Opcode.RETURN, 0)), List.of(), List.of())));
+            }
+            classes.add(calculationOwner(owner, "Ljava/lang/Object;", List.of(), methods));
+        }
+        writeClasses(dex.resolve("classes.dex"), classes);
+        run(dex, config, code, report, "Lfixture/");
+        var references = new JSONObject(Files.readString(report)).getJSONArray("methods");
+        assert references.length() == 84;
+        for (Object value : references) assert ((JSONObject)value).getBoolean("artifact_verified") : value;
         // 精确必保清单也必须服从同一兼容判断；声明回调不会使其自动变得安全。
         String activity = "Lfixture/ui/ScreenActivity;";
         var sensitive = calculationOwner(activity, "Landroid/app/Activity;", List.of(),
@@ -362,7 +399,7 @@ public final class Pvm2ProtectionCheck {
         for (Object value : mixed) {
             var row = (JSONObject) value;
             if (row.getBoolean("artifact_verified")) protectedCount++;
-            else { assert row.getString("reason").equals("ui_runtime_glue"); kept++; }
+            else { assert row.getString("reason").equals("ui_runtime_glue:virtual_contract"); kept++; }
         }
         assert kept == 1 && protectedCount == 1 : "转换成功率不能代替完整范围覆盖率";
         for (boolean safe : List.of(true, false)) {
@@ -375,10 +412,10 @@ public final class Pvm2ProtectionCheck {
             } catch (InvocationTargetException failure) {
                 assert !safe && failure.getCause().getMessage().contains("关键方法未通过验证");
                 JSONObject row = new JSONObject(Files.readString(report)).getJSONArray("methods").getJSONObject(0);
-                assert !row.getBoolean("artifact_verified") && row.getString("reason").equals("ui_runtime_glue");
+                assert !row.getBoolean("artifact_verified") && row.getString("reason").equals("ui_runtime_glue:virtual_contract");
             }
         }
-        System.out.println("方法级兼容检查通过：通用命名、独立计算、回调保留、必保约束、3 类 21 方法中的 18 个计算方法转换");
+        System.out.println("方法级兼容检查通过：通用命名、独立计算、回调保留、必保约束、18 个计算方法、60 个引用叶子方法及 24 个基本类型短方法转换");
     }
 
     private static void fixture(Path path) throws Exception {

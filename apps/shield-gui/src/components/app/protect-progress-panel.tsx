@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, CircleX, Loader2 } from "lucide-react";
 import { stepLabels } from "@/components/app/branding";
 import { t, type Locale } from "@/lib/i18n";
 
@@ -24,10 +24,10 @@ export function ProtectProgressPanel({
 }) {
   const [tick, refresh] = useState(0);
   useEffect(() => {
-    if (!startedAt || finishedAt) return;
+    if (state !== "running" || !startedAt || finishedAt) return;
     const timer = window.setInterval(() => refresh((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
-  }, [finishedAt, startedAt]);
+  }, [state, finishedAt, startedAt]);
   const currentIndex = steps.indexOf(currentStep);
   const percent = state === "done" ? 100 : currentIndex < 0 ? 0 : Math.min(99, Math.round(((currentIndex + 0.5) / steps.length) * 100));
   const elapsed = (() => {
@@ -39,7 +39,7 @@ export function ProtectProgressPanel({
   return (
     <aside className="rounded-[14px] border bg-card p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">{showProgress ? t(locale, "running") : t(locale, "ready")}</h2>
+        <h2 className="text-sm font-semibold" aria-live="polite">{t(locale, state === "failed" || state === "done" || state === "running" ? state : "ready")}</h2>
         {showProgress && <span className="text-xs tabular-nums text-muted-foreground">{percent}%{elapsed ? ` · ${elapsed}` : ""}</span>}
       </div>
       <div className="mb-4 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${percent}%` }} /></div>
@@ -51,7 +51,9 @@ export function ProtectProgressPanel({
       <div className="space-y-2">
         {steps.map((step) => (
           <div key={step} className="flex items-center gap-2 rounded-md px-2 py-1.5">
-            {currentStep === step && state === "running" ? (
+            {currentStep === step && state === "failed" ? (
+              <CircleX className="h-4 w-4 text-destructive" aria-label={t(locale, "failed")} />
+            ) : currentStep === step && state === "running" ? (
               <Loader2 className="h-4 w-4 animate-spin text-primary" />
             ) : steps.indexOf(step) < steps.indexOf(currentStep) || state === "done" ? (
               <Check className="h-4 w-4 text-success" />

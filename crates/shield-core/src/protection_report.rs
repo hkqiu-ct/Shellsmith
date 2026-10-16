@@ -59,6 +59,10 @@ pub enum Pvm2SkipReason {
     DataResourceRuntimeGlue,
     CompilerGeneratedBridge,
     PlaybackCompatibility,
+    CompatibilityVirtualContract,
+    CompatibilitySynchronization,
+    CompatibilityExceptionRegion,
+    CompatibilityNonLeafInstruction,
     NullableReceiver,
     UnsupportedOpcode,
     RegisterLimit,
@@ -72,6 +76,23 @@ pub enum Pvm2SkipReason {
 
 impl Pvm2SkipReason {
     fn classify(reason: &str) -> Self {
+        if let Some((scope, restriction)) = reason.split_once(':') {
+            if matches!(
+                scope,
+                "ui_runtime_glue"
+                    | "data_resource_runtime_glue"
+                    | "playback_compatibility"
+                    | "compiler_generated_bridge"
+            ) {
+                return match restriction {
+                    "virtual_contract" => Self::CompatibilityVirtualContract,
+                    "synchronization" => Self::CompatibilitySynchronization,
+                    "exception_region" => Self::CompatibilityExceptionRegion,
+                    "non_leaf_instruction" => Self::CompatibilityNonLeafInstruction,
+                    _ => Self::Other,
+                };
+            }
+        }
         match reason {
             "no_code" => Self::NoCode,
             "initializer" => Self::Initializer,
@@ -99,10 +120,14 @@ impl Pvm2SkipReason {
         match self {
             Self::NoCode => "无 DEX 方法体（Native/抽象方法）",
             Self::Initializer => "构造器/静态初始化器",
-            Self::UiRuntimeGlue => "界面/生命周期兼容规则",
+            Self::UiRuntimeGlue => "界面范围兼容规则（未细分）",
             Self::DataResourceRuntimeGlue => "数据/资源框架兼容规则",
             Self::CompilerGeneratedBridge => "编译器生成桥接/合成方法",
             Self::PlaybackCompatibility => "媒体/辅助类兼容规则",
+            Self::CompatibilityVirtualContract => "兼容范围：继承/接口虚方法契约未验证",
+            Self::CompatibilitySynchronization => "兼容范围：同步方法",
+            Self::CompatibilityExceptionRegion => "兼容范围：含异常处理区",
+            Self::CompatibilityNonLeafInstruction => "兼容范围：含叶子方法白名单之外的指令",
             Self::NullableReceiver => "接收者非空语义无法证明",
             Self::UnsupportedOpcode => "不支持的指令",
             Self::RegisterLimit => "寄存器超限",
@@ -260,9 +285,13 @@ impl std::fmt::Display for Pvm2Failure {
                         | Pvm2SkipReason::DataResourceRuntimeGlue
                         | Pvm2SkipReason::CompilerGeneratedBridge
                         | Pvm2SkipReason::PlaybackCompatibility
+                        | Pvm2SkipReason::CompatibilityVirtualContract
+                        | Pvm2SkipReason::CompatibilitySynchronization
+                        | Pvm2SkipReason::CompatibilityExceptionRegion
+                        | Pvm2SkipReason::CompatibilityNonLeafInstruction
                 )
             }) {
-                write!(f, "\n部分方法被兼容规则排除，请根据本地报告确认要保护的业务范围；不应强行绕过兼容检查。")?;
+                write!(f, "\n兼容分类表示当前准入限制，不代表这些方法都是生命周期回调。仅修改类前缀或降低保护级别不能证明这些方法已获 PVM2 保护；可将独立业务逻辑提取到普通类，并重新核验逐方法覆盖。")?;
             }
             if self.summary.reasons.keys().any(|r| {
                 matches!(
@@ -714,6 +743,22 @@ mod tests {
         let cases = [
             ("no_code", Pvm2SkipReason::NoCode),
             ("initializer", Pvm2SkipReason::Initializer),
+            (
+                "ui_runtime_glue:virtual_contract",
+                Pvm2SkipReason::CompatibilityVirtualContract,
+            ),
+            (
+                "data_resource_runtime_glue:synchronization",
+                Pvm2SkipReason::CompatibilitySynchronization,
+            ),
+            (
+                "playback_compatibility:exception_region",
+                Pvm2SkipReason::CompatibilityExceptionRegion,
+            ),
+            (
+                "ui_runtime_glue:non_leaf_instruction",
+                Pvm2SkipReason::CompatibilityNonLeafInstruction,
+            ),
             ("ui_runtime_glue", Pvm2SkipReason::UiRuntimeGlue),
             (
                 "data_resource_runtime_glue",

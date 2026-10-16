@@ -92,8 +92,8 @@ int main(int argc, char** argv) {
     assert(written == 123 && std::all_of(std::begin(boundary), std::end(boundary), [](uint8_t c) { return c == 0xa5; }));
     const auto plain = image();
     std::vector<uint8_t> code;
-    u16(code, 4); u16(code, 1); u32(code, 8); u32(code, 2); u16(code, argc > 1 && std::string(argv[1]) != "block-before-init" ? 155 : 98);
-    for (int i = 0; i < (argc > 1 && std::string(argv[1]) != "block-before-init" ? 155 : 98); i++) {
+    u16(code, 4); u16(code, 1); u32(code, 8); u32(code, 2); u16(code, argc > 1 && std::string(argv[1]) != "block-before-init" ? 170 : 98);
+    for (int i = 0; i < (argc > 1 && std::string(argv[1]) != "block-before-init" ? 170 : 98); i++) {
         auto bytes = plain;
         if (i >= 98) {
             std::ifstream input(std::string(argv[1]) + "/image" + std::to_string(i - 98) + ".bin", std::ios::binary);
@@ -306,6 +306,46 @@ int main(int argc, char** argv) {
         env->SetObjectArrayElement(mixedArgs, 0, nullptr);
         assert(!interpret(env, 2, id, mixedArgs) && env->ExceptionCheck()); env->ExceptionClear();
     }
+    // 不同 JNI 句柄指向同一对象时，引用相等与返回值必须保持 Java 身份语义。
+    jobjectArray unary = env->NewObjectArray(1, objectClass, nullptr);
+    jintArray array = env->NewIntArray(3);
+    jstring text = env->NewStringUTF("reference");
+    jstring equalText = env->NewStringUTF("reference");
+    jobject alias = env->NewLocalRef(text);
+    jobject references[] = {nullptr, wrappers[0], wrappers[1], wrappers[2], wrappers[3], wrappers[4], array, text, equalText, alias};
+    int referenceChecks = 0;
+    for (int isa = 0; isa < 3; isa++) {
+        for (jobject left : references) {
+            env->SetObjectArrayElement(unary, 0, left);
+            result = interpret(env, 2, 155 + isa, unary);
+            assert(!env->ExceptionCheck() && env->IsSameObject(result, left));
+            if (result) env->DeleteLocalRef(result);
+            result = interpret(env, 2, 164 + isa, unary);
+            assert(result && !env->ExceptionCheck() && env->CallIntMethod(result, unbox) == (left == nullptr));
+            env->DeleteLocalRef(result); referenceChecks += 2;
+            for (jobject right : references) {
+                env->SetObjectArrayElement(tailArgs, 0, left); env->SetObjectArrayElement(tailArgs, 1, right);
+                result = interpret(env, 2, 158 + isa, tailArgs);
+                assert(!env->ExceptionCheck() && env->IsSameObject(result, left ? left : right));
+                if (result) env->DeleteLocalRef(result);
+                result = interpret(env, 2, 161 + isa, tailArgs);
+                assert(result && !env->ExceptionCheck() && env->CallIntMethod(result, unbox) == env->IsSameObject(left, right));
+                env->DeleteLocalRef(result); referenceChecks += 2;
+            }
+        }
+        for (jobject value : {static_cast<jobject>(array), static_cast<jobject>(nullptr)}) {
+            env->SetObjectArrayElement(unary, 0, value);
+            result = interpret(env, 2, 167 + isa, unary);
+            assert(!env->ExceptionCheck() && env->IsSameObject(result, value));
+            if (result) env->DeleteLocalRef(result);
+            referenceChecks++;
+        }
+    }
+    assert(referenceChecks == 666);
+    for (int id = 155; id < 170; id++) assert(!items.at(id)->parsed_vm);
+    env->DeleteLocalRef(unary); env->DeleteLocalRef(array); env->DeleteLocalRef(text);
+    env->DeleteLocalRef(equalText); env->DeleteLocalRef(alias);
+    puts("引用叶子方法：三种 ISA 共 666 次透传、空值选择、身份比较、数组引用及清理验证通过");
     for (jobject wrapper : wrappers) if (wrapper) env->DeleteLocalRef(wrapper);
     env->DeleteLocalRef(sentinel); env->DeleteLocalRef(tailArgs); env->DeleteLocalRef(mixedArgs); env->DeleteLocalRef(objectClass);
     puts("声明参数类型：5 种包装引用、null、混合宽参数、数量/类型错误拒绝通过");
