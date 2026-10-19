@@ -1,0 +1,15 @@
+Shellsmith
+Copyright (c) 2026 kairowan 及 Shellsmith 贡献者
+
+Shellsmith 基于 Mocika Shield（https://github.com/mocikadev/mocika-shield）演化。
+Shellsmith 新增及修改部分的署名见 LICENSE-MIT 和 LICENSE-APACHE。
+继承自上游的代码保留以下原始版权声明：
+
+MIT：
+Copyright (c) 2026 索学超及贡献者
+
+Apache-2.0：
+Copyright 2026 索学超及贡献者
+
+上游采用 MIT OR Apache-2.0 双协议，许可条款分别见 LICENSE-MIT 和 LICENSE-APACHE。
+其他第三方组件的许可证与声明见对应源码目录及 tools/licenses/。
