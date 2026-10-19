@@ -50,6 +50,9 @@ public final class ApkRecoveryCheck {
     /** 白盒成本检查：复用已公开的指令长度/寄存器布局，反解每包的置换表。 */
     private static byte[] canonicalCode(byte[] image) throws Exception {
         ByteBuffer b = buffer(image);
+        if (image.length < 19 || b.getInt() != 0x324d5650) throw new IllegalArgumentException("VM 镜像无效");
+        int version = u16(b);
+        if (version < 7 || version > 9) throw new IllegalArgumentException("恢复检查不支持该 VM 版本；不能视为防护通过");
         int registers = u16((ByteBuffer) b.position(6));
         b.position(10); int handlers = u16(b), size = u16(b);
         b.position(16); int strings = u16(b); b.get();
@@ -71,7 +74,7 @@ public final class ApkRecoveryCheck {
             if (slot >= registers || reverse[slot] != -1) throw new IllegalArgumentException("寄存器映射无效");
             reverse[slot] = (byte) i;
         }
-        if (buffer(image).getShort(4) >= 8) take(b, Byte.toUnsignedInt(b.get()));
+        if (version >= 8) take(b, Byte.toUnsignedInt(b.get()));
         take(b, handlers * 10);
         byte[] code = take(b, size);
         if (b.hasRemaining()) throw new IllegalArgumentException("VM 镜像尾部残留");
@@ -124,6 +127,9 @@ public final class ApkRecoveryCheck {
             byte[] image = Pvm2Compiler.tryCompile(null, code, "I", true,
                     Pvm2Morph.fromIsa(isa, new java.security.SecureRandom()), true).image;
             if (!Arrays.equals(canonicalCode(image), expected)) throw new AssertionError("随机映射未还原为预期指令");
+            byte[] unsupported = image.clone(); unsupported[4] = 10;
+            try { canonicalCode(unsupported); throw new AssertionError("未拒绝未知镜像版本"); }
+            catch (IllegalArgumentException expectedFailure) { }
             // 此无常量池样本的前两个操作码映射位于 26、27 字节。
             image[27] = image[26];
             try { canonicalCode(image); throw new AssertionError("未拒绝重复映射"); }
@@ -262,12 +268,11 @@ public final class ApkRecoveryCheck {
                     int method = code.getInt(), original = code.getInt(), size = code.getInt(), flags = code.getInt();
                     if (size < 28 || flags != 2) throw new IllegalArgumentException("VM 记录无效");
                     byte[] image = decrypt(key, take(code, 12), take(code, size - 12), true);
-                    if (image.length != original || image.length < 19 || !Arrays.equals(Arrays.copyOf(image, 4), new byte[]{'P','V','M','2'})
-                            || (buffer(image).getShort(4) != 7 && buffer(image).getShort(4) != 8)) throw new IllegalStateException("VM 镜像无效");
+                    if (image.length != original) throw new IllegalStateException("VM 镜像长度不一致");
+                    byte[] canonical = canonicalCode(image);
                     String name = "image-" + dexIndex + "-" + method + ".bin";
                     if (recovered.put(dexIndex + ":" + method, (int) image[18]) != null) throw new IllegalStateException("重复 VM 记录");
                     Files.write(root.resolve(name), image);
-                    byte[] canonical = canonicalCode(image);
                     Files.write(root.resolve(name + ".canonical"), canonical);
                     images.put(new JSONObject().put("file", name).put("sha256", hash(image)).put("policy", image[18])
                             .put("canonical_code_sha256", hash(canonical)));
@@ -280,20 +285,27 @@ public final class ApkRecoveryCheck {
             JSONObject report = new JSONObject(Files.readString(Path.of(args[3])));
             if (!hash(Files.readAllBytes(apk)).equals(report.getString("output_sha256"))) throw new IllegalStateException("报告与 APK 不匹配");
             JSONObject selection = report.getJSONObject("build").getJSONObject("selection");
+            Map<String, Map<String, com.android.tools.smali.dexlib2.iface.Method>> dexMethods = new HashMap<>();
             for (Object entry : report.getJSONArray("methods")) {
                 JSONObject row = (JSONObject) entry;
                 if (!row.getBoolean("artifact_verified")) continue;
                 String name = row.getString("input_dex");
-                DexBackedDexFile file = new DexBackedDexFile(Opcodes.getDefault(), Files.readAllBytes(root.resolve(name)));
-                boolean found = false;
-                for (var cls : file.getClasses()) for (var method : cls.getMethods()) {
-                    if (!Pvm2Report.descriptor(method).equals(row.getString("descriptor"))) continue;
-                    int index = row.getInt("final_method_index"), dexIndex = row.getInt("final_dex_index");
-                    if (!TrueVmpTrampoline.matches(method, dexIndex, index, selection.getString("bridge"), selection.getString("bridge_method"))
-                            || !recovered.containsKey(dexIndex + ":" + index)) throw new IllegalStateException("跳板与镜像不一致");
-                    found = true; trampolines++;
+                if (!name.matches("classes[0-9]*\\.dex") || !hashes.has(name)) throw new IllegalArgumentException("报告引用了未恢复的 DEX");
+                if (!dexMethods.containsKey(name)) {
+                    // 每个 DEX 只清点一次；真实应用的上万条报告不能反复扫描整份 DEX。
+                    DexBackedDexFile file = new DexBackedDexFile(Opcodes.getDefault(), Files.readAllBytes(root.resolve(name)));
+                    Map<String, com.android.tools.smali.dexlib2.iface.Method> methods = new HashMap<>();
+                    for (var cls : file.getClasses()) for (var method : cls.getMethods()) {
+                        if (methods.put(Pvm2Report.descriptor(method), method) != null) throw new IllegalStateException("DEX 方法签名重复");
+                    }
+                    dexMethods.put(name, methods);
                 }
-                if (!found) throw new IllegalStateException("恢复 DEX 中缺少方法");
+                var method = dexMethods.get(name).get(row.getString("descriptor"));
+                if (method == null) throw new IllegalStateException("恢复 DEX 中缺少方法");
+                int index = row.getInt("final_method_index"), dexIndex = row.getInt("final_dex_index");
+                if (!TrueVmpTrampoline.matches(method, dexIndex, index, selection.getString("bridge"), selection.getString("bridge_method"))
+                        || !recovered.containsKey(dexIndex + ":" + index)) throw new IllegalStateException("跳板与镜像不一致");
+                trampolines++;
             }
         }
         JSONObject nativeFiles = recoverNative(apk, root, cert, ikm);
