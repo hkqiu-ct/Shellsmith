@@ -50,11 +50,13 @@ pub(crate) fn process_dex(
         print_success(&format!("扫描到 ARouter 路由表类 {} 个", routes.len()));
     }
     let therouter = crate::dex_packer::route_scanner::scan_therouter_registry(&dex_dir)?;
-    if !therouter.is_empty() {
+    if !therouter.is_empty() && therouter.asm_registered {
+        print_success("TheRouter 已启用编译期注册，保留原注册链路，无需运行时索引");
+    } else if !therouter.is_empty() {
         let holder = therouter
             .holder
             .as_ref()
-            .context("扫描到 TheRouter 生成类，但未找到运行时索引持有类")?;
+            .context("THEROUTER_REGISTRATION_UNRESOLVED：检测到 TheRouter 生成类，但既未确认编译期注册标记，也未找到可用的运行时索引。此为加固兼容性限制，不代表原 App 存在 bug；请核对 TheRouter 插件与运行库版本、编译期注册和混淆结果，不能仅忽略此检查后继续加固")?;
         fs::write(
             assets_dir.join("therouter_registry.txt"),
             therouter.to_index_text(),

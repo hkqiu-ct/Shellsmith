@@ -13,6 +13,7 @@ const AROUTER_REGISTRY_PREFIXES: [&str; 3] = [
 const THEROUTER_SERVICE_PREFIX: &str = "a/ServiceProvider__TheRouter__";
 const THEROUTER_ROUTE_PREFIX: &str = "a/RouterMap__TheRouter__";
 const THEROUTER_AUTOWIRED_SUFFIX: &str = "__TheRouter__Autowired";
+const THEROUTER_INJECTOR: &str = "La/TheRouterServiceProvideInjecter;";
 const THEROUTER_INDEX_METHODS: [&str; 3] = [
     "getServiceProviderIndex",
     "getRouterMapIndex",
@@ -22,6 +23,7 @@ const THEROUTER_INDEX_METHODS: [&str; 3] = [
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TheRouterRegistry {
     pub holder: Option<String>,
+    pub asm_registered: bool,
     pub services: Vec<String>,
     pub routes: Vec<String>,
     pub autowired: Vec<String>,
@@ -75,9 +77,7 @@ pub fn scan_arouter_routes(dex_dir: &Path) -> Result<Vec<String>> {
     Ok(routes)
 }
 
-/// Build the class index used by TheRouter's non-ASM fallback. TheRouter normally
-/// scans `ApplicationInfo.sourceDir`; after DEXB packing that APK contains only the
-/// Stub DEX, so the generated provider classes must be indexed before encryption.
+/// 为 TheRouter 的运行时扫描路径补齐加密前索引；编译期注册路径沿用宿主的注册代码。
 pub fn scan_therouter_registry(dex_dir: &Path) -> Result<TheRouterRegistry> {
     let mut result = TheRouterRegistry::default();
     let mut holder_methods: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -103,6 +103,7 @@ pub fn scan_therouter_registry(dex_dir: &Path) -> Result<TheRouterRegistry> {
             }
         }
         collect_method_holders(&data, &mut holder_methods)?;
+        result.asm_registered |= has_therouter_asm_flag(&data).unwrap_or(false);
     }
 
     result.services.sort();
@@ -121,6 +122,109 @@ pub fn scan_therouter_registry(dex_dir: &Path) -> Result<TheRouterRegistry> {
         })
         .map(|(class_name, _)| class_name.replace('/', "."));
     Ok(result)
+}
+
+/// 上游插件在唯一的静态布尔字段 asm 中写入注册标记；D8/R8 将其保存为 encoded_value。
+fn has_therouter_asm_flag(data: &[u8]) -> Option<bool> {
+    let strings = u32_le(data, 56) as usize;
+    let string_offset = u32_le(data, 60) as usize;
+    let types = u32_le(data, 64) as usize;
+    let type_offset = u32_le(data, 68) as usize;
+    let type_name = |index: usize| {
+        if index >= types {
+            return None;
+        }
+        let offset = type_offset.checked_add(index.checked_mul(4)?)?;
+        data.get(offset..offset.checked_add(4)?)?;
+        resolve_string(data, u32_le(data, offset) as usize, strings, string_offset)
+    };
+    let offset = u32_le(data, 100) as usize;
+    let size = (u32_le(data, 96) as usize).checked_mul(32)?;
+    for class in data
+        .get(offset..offset.checked_add(size)?)?
+        .chunks_exact(32)
+    {
+        let class_index = u32_le(class, 0) as usize;
+        if type_name(class_index)? != THEROUTER_INJECTOR {
+            continue;
+        }
+        let mut cursor = u32_le(class, 24) as usize;
+        let values = u32_le(class, 28) as usize;
+        if cursor == 0 || values == 0 {
+            return None;
+        }
+        // ponytail: 只确认上游当前的单静态字段布局；新增字段或复杂初始化时须扩展 DEX 解析后再放行。
+        if read_uleb128(data, &mut cursor)? != 1 {
+            return None;
+        }
+        let instance_fields = read_uleb128(data, &mut cursor)?;
+        let direct_methods = read_uleb128(data, &mut cursor)?;
+        read_uleb128(data, &mut cursor)?;
+        let field_index = read_uleb128(data, &mut cursor)? as usize;
+        if read_uleb128(data, &mut cursor)? & 0x8 == 0 || field_index >= u32_le(data, 80) as usize {
+            return None;
+        }
+        let field = (u32_le(data, 84) as usize).checked_add(field_index.checked_mul(8)?)?;
+        data.get(field..field.checked_add(8)?)?;
+        if u16_le(data, field) as usize != class_index
+            || type_name(u16_le(data, field + 2) as usize)? != "Z"
+            || resolve_string(
+                data,
+                u32_le(data, field + 4) as usize,
+                strings,
+                string_offset,
+            )? != "asm"
+        {
+            return None;
+        }
+        for _ in 0..instance_fields {
+            read_uleb128(data, &mut cursor)?;
+            read_uleb128(data, &mut cursor)?;
+        }
+        let mut method_index = 0usize;
+        for _ in 0..direct_methods {
+            method_index = method_index.checked_add(read_uleb128(data, &mut cursor)? as usize)?;
+            read_uleb128(data, &mut cursor)?;
+            let code = read_uleb128(data, &mut cursor)? as usize;
+            if method_index >= u32_le(data, 88) as usize {
+                return None;
+            }
+            let method = (u32_le(data, 92) as usize).checked_add(method_index.checked_mul(8)?)?;
+            data.get(method..method.checked_add(8)?)?;
+            if resolve_string(
+                data,
+                u32_le(data, method + 4) as usize,
+                strings,
+                string_offset,
+            )? == "<clinit>"
+            {
+                // Kotlin/D8 会保留空初始化器；仅接受 return-void，其他初始化逻辑不能证明标记未被改写。
+                let code = data.get(code..code.checked_add(18)?)?;
+                if u16_le(code, 6) != 0 || u32_le(code, 12) != 1 || u16_le(code, 16) != 0x0e {
+                    return None;
+                }
+            }
+        }
+        // encoded_array 长度为 1；VALUE_BOOLEAN 的 value_arg=1 表示 true，无后续数据。
+        return Some(data.get(values..values.checked_add(2)?)? == [1, 0x3f]);
+    }
+    None
+}
+
+fn read_uleb128(data: &[u8], cursor: &mut usize) -> Option<u32> {
+    let mut value = 0;
+    for shift in (0..35).step_by(7) {
+        let byte = *data.get(*cursor)?;
+        *cursor += 1;
+        if shift == 28 && byte > 0x0f {
+            return None;
+        }
+        value |= u32::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn is_therouter_generated_class(name: &str, prefix: &str, suffix: Option<&str>) -> bool {
@@ -364,9 +468,107 @@ fn u16_le(data: &[u8], offset: usize) -> u16 {
 mod tests {
     use super::{
         descriptor_prefix_matches_name, is_arouter_registry_class, is_therouter_generated_class,
-        TheRouterRegistry, THEROUTER_AUTOWIRED_SUFFIX, THEROUTER_ROUTE_PREFIX,
-        THEROUTER_SERVICE_PREFIX,
+        read_uleb128, scan_therouter_registry, TheRouterRegistry, THEROUTER_AUTOWIRED_SUFFIX,
+        THEROUTER_ROUTE_PREFIX, THEROUTER_SERVICE_PREFIX,
     };
+
+    #[test]
+    fn therouter_编译期注册检查字段类型初值和初始化改写() {
+        // 构造扫描器实际读取的 DEX 表，包含生成类，但不包含任何运行时索引 getter。
+        let strings = [
+            "La/TheRouterServiceProvideInjecter;",
+            "Z",
+            "asm",
+            "<clinit>",
+            "La/RouterMap__TheRouter__app;",
+        ];
+        let mut dex = vec![0u8; 112 + strings.len() * 4 + 12 + 8 + 8 + 64];
+        let strings_offset = 112;
+        let types_offset = strings_offset + strings.len() * 4;
+        let field_offset = types_offset + 12;
+        let method_offset = field_offset + 8;
+        let classes_offset = method_offset + 8;
+        let put = |bytes: &mut Vec<u8>, offset: usize, value: usize| {
+            bytes[offset..offset + 4].copy_from_slice(&(value as u32).to_le_bytes());
+        };
+        dex[..8].copy_from_slice(b"dex\n035\0");
+        for (offset, value) in [
+            (56, strings.len()),
+            (60, strings_offset),
+            (64, 3),
+            (68, types_offset),
+            (80, 1),
+            (84, field_offset),
+            (92, method_offset),
+            (96, 2),
+            (100, classes_offset),
+        ] {
+            put(&mut dex, offset, value);
+        }
+        for (index, value) in strings.iter().enumerate() {
+            let offset = dex.len();
+            put(&mut dex, strings_offset + index * 4, offset);
+            dex.push(value.len() as u8);
+            dex.extend_from_slice(value.as_bytes());
+            dex.push(0);
+        }
+        put(&mut dex, types_offset + 4, 1);
+        put(&mut dex, types_offset + 8, 4);
+        dex[field_offset + 2] = 1;
+        put(&mut dex, field_offset + 4, 2);
+        put(&mut dex, method_offset + 4, 3);
+        put(&mut dex, classes_offset + 32, 2);
+        let class_data = dex.len();
+        dex.extend_from_slice(&[1, 0, 0, 0, 0, 9]);
+        put(&mut dex, classes_offset + 24, class_data);
+        let values = dex.len();
+        dex.extend_from_slice(&[1, 0x3f]);
+        put(&mut dex, classes_offset + 28, values);
+
+        let dir = tempfile::tempdir().unwrap();
+        let scan = |bytes: &[u8]| {
+            std::fs::write(dir.path().join("classes.dex"), bytes).unwrap();
+            scan_therouter_registry(dir.path()).unwrap()
+        };
+        let registry = scan(&dex);
+        assert!(registry.asm_registered && registry.holder.is_none() && !registry.is_empty());
+        for (offset, value) in [
+            (values + 1, 0x1f),
+            (values + 1, 0x04),
+            (values, 0),
+            (field_offset + 2, 0),
+            (field_offset + 4, 3),
+            (class_data, 2),
+            (class_data + 5, 1),
+        ] {
+            let mut changed = dex.clone();
+            changed[offset] = value;
+            assert!(!scan(&changed).asm_registered, "offset={offset}");
+        }
+        // 截断静态初值不能误判为已注册，也不能越界 panic。
+        assert!(!scan(&dex[..values + 1]).asm_registered);
+        let mut initialized = dex.clone();
+        initialized.resize((initialized.len() + 3) & !3, 0);
+        let code = initialized.len();
+        initialized.resize(code + 18, 0);
+        put(&mut initialized, code + 12, 1);
+        initialized[code + 16] = 0x0e;
+        let class_data = initialized.len();
+        put(&mut initialized, classes_offset + 24, class_data);
+        put(&mut initialized, 88, 1);
+        initialized.extend_from_slice(&[1, 0, 1, 0, 0, 9, 0, 8]);
+        let mut offset = code;
+        while offset >= 128 {
+            initialized.push((offset as u8 & 0x7f) | 0x80);
+            offset >>= 7;
+        }
+        initialized.push(offset as u8);
+        assert!(scan(&initialized).asm_registered, "空初始化器应兼容");
+        initialized[code + 16] = 0;
+        assert!(!scan(&initialized).asm_registered, "未知初始化逻辑不能放行");
+        assert_eq!(read_uleb128(&[0xff; 5], &mut 0), None);
+        assert_eq!(read_uleb128(&[0x80], &mut 0), None);
+    }
 
     #[test]
     fn 只接受_arouter_可注册入口类() {
@@ -435,6 +637,7 @@ mod tests {
             services: vec!["a.ServiceProvider__TheRouter__123".to_string()],
             routes: vec![],
             autowired: vec![],
+            asm_registered: false,
         };
         assert_eq!(
             "HOLDER\tf8.b\nSERVICE\ta.ServiceProvider__TheRouter__123",
