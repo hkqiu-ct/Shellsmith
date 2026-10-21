@@ -1,3 +1,5 @@
+import { ByosSettings } from "@/components/app/byos-settings";
+import { byosRequirements, type ByosProfile } from "@/lib/tauri";
 import { RuntimeUiSettings } from "@/components/app/runtime-ui-settings";
 import { openFileDialog, type RuntimeUiProtection } from "@/lib/tauri";
 import { FolderKey, FolderOpen, Play, Settings2 } from "lucide-react";
@@ -15,6 +17,7 @@ import { t, tf, type Locale } from "@/lib/i18n";
 import type { CertificateRecord } from "@/lib/tauri";
 
 export function ProtectConfigurationPanel({
+  byosProfile, onByosProfileChange,
   runtimeUi, onRuntimeUiChange,
   locale,
   disabled,
@@ -55,6 +58,8 @@ export function ProtectConfigurationPanel({
   onRestoreRecommended,
   onStart,
 }: {
+  byosProfile: ByosProfile | null;
+  onByosProfileChange: (profile: ByosProfile | null) => void;
   runtimeUi: RuntimeUiProtection;
   onRuntimeUiChange: (value: RuntimeUiProtection) => void;
   locale: Locale;
@@ -119,6 +124,7 @@ export function ProtectConfigurationPanel({
               <SheetDescription>{t(locale, "protectSettingsHint")}</SheetDescription>
             </SheetHeader>
             <div className="mt-7 space-y-6">
+              <ByosSettings value={byosProfile} onChange={onByosProfileChange} locale={locale} disabled={disabled} />
               <RuntimeUiSettings value={runtimeUi} onChange={onRuntimeUiChange} locale={locale} disabled={disabled} />
               <SettingSelect label={t(locale, "targetSystem")} value={runtimeMode} onChange={(value) => onRuntimeModeChange(value as RuntimeMode)} hint={runtimeMode === "android_api19" ? t(locale, "runtimeAndroid44Hint") : t(locale, "runtimeStandardHint")} guidance={runtimeModeGuidance}>
                 <option value="standard">{t(locale, "runtimeStandard")}</option>
@@ -220,6 +226,7 @@ export function ProtectConfigurationPanel({
       <dl className="mt-5 space-y-3 text-sm">
         <Summary label={locale === "zh" ? "界面与调试保护" : "UI & debugging protection"} value={`${runtimeUi.secure_screen ? "SECURE · " : ""}ADB: ${runtimeUi.adb_policy}${runtimeUi.runtime_recheck ? " · RASP" : ""}${runtimeUi.obfuscate_resource_names ? " · ID names" : ""}`} />
         <Summary label={t(locale, "targetSystem")} value={runtimeMode === "android_api19" ? t(locale, "runtimeAndroid44") : t(locale, "runtimeStandard")} hint={runtimeMode === "android_api19" ? t(locale, "runtimeAndroid44Summary") : t(locale, "runtimeStandardSummary")} guidance={runtimeModeGuidance} />
+        <Summary label={locale === "en" ? "Key delivery" : "密钥交付"} value={byosProfile?.name ?? (locale === "en" ? "Offline" : "本地离线")} hint={byosProfile ? (locale === "en" ? `Online authorization required at startup · ${byosRequirements[byosProfile.authMode].platform}` : `启动需要联网授权 · ${byosRequirements[byosProfile.authMode].platform}`) : ""} />
         <Summary label={t(locale, "environmentPolicy")} value={environmentPolicy === "strict" ? t(locale, "environmentStrict") : t(locale, "environmentCompatible")} hint={environmentPolicy === "strict" ? t(locale, "environmentStrictSummary") : t(locale, "environmentCompatibleSummary")} />
         <Summary label={t(locale, "protectionProfile")} value={t(locale, protectionProfile === "compat" ? "protectionCompat" : protectionProfile === "strict" ? "protectionStrict" : "protectionBalanced")} />
         <Summary label={t(locale, "aiResistance")} value={t(locale, aiResistance === "off" ? "aiResistanceOff" : aiResistance === "high" ? "aiResistanceHigh" : "aiResistanceBalanced")} />

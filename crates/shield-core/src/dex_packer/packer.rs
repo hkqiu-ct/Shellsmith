@@ -6,6 +6,9 @@ use std::path::Path;
 
 use super::crypto;
 
+const DEXB_VERSION_OFFLINE: u32 = 6;
+const DEXB_VERSION_BYOS: u32 = 7;
+
 struct DexMeta {
     name: String,
     original_size: u32,
@@ -91,6 +94,127 @@ impl DexPacker {
         let envelope_key = crypto::derive_envelope_key(sig_bytes, &build_id);
         let wrapped_ikm = crypto::encrypt(ikm, &envelope_key, &wrap_nonce);
 
+        let ciphertext = crypto::encrypt(&self.build_payload()?, &derived_key, &nonce);
+
+        let dex_count = self.dex_files.len() as u32;
+        // DEXB v6 头部：magic + version + dex_count + flags
+        //   + signature + build_id + wrap_nonce + wrapped_ikm + payload_nonce → 密文。
+        // IKM 仍需在设备侧恢复，但不再以明文形式出现在头部。
+        let mut out = Vec::with_capacity(
+            4 + 4
+                + 4
+                + 4
+                + 1
+                + sig_bytes.len()
+                + 16
+                + 12
+                + 2
+                + wrapped_ikm.len()
+                + 12
+                + ciphertext.len(),
+        );
+        out.extend_from_slice(b"DEXB");
+        out.extend_from_slice(&DEXB_VERSION_OFFLINE.to_le_bytes());
+        out.extend_from_slice(&dex_count.to_le_bytes());
+        out.extend_from_slice(&(self.compression_layers as u32).to_le_bytes());
+        out.push(sig_bytes.len() as u8);
+        out.extend_from_slice(sig_bytes);
+        out.extend_from_slice(&build_id);
+        out.extend_from_slice(&wrap_nonce);
+        out.extend_from_slice(&(wrapped_ikm.len() as u16).to_le_bytes());
+        out.extend_from_slice(&wrapped_ikm);
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&ciphertext);
+
+        let mut file = fs::File::create(output_path)
+            .with_context(|| format!("无法创建输出文件: {:?}", output_path))?;
+        file.write_all(&out).context("写入文件失败")?;
+        Ok(())
+    }
+
+    /// DEXB v7：APK 头部只存 token_id + server_url，IKM 由服务端在运行时下发。
+    /// 调用方负责在加固前已将 ikm 上传到服务端并取得 token_id。
+    pub fn pack_byos(
+        &self,
+        output_path: &Path,
+        ikm: &[u8],
+        signature: &str,
+        token_id: &str,
+        server_url: &str,
+    ) -> Result<()> {
+        anyhow::ensure!(ikm.len() == 32, "BYOS IKM 必须为 32 字节");
+        crate::remote_key::validate_endpoint(server_url)?;
+        crate::remote_key::validate_token(token_id)?;
+        anyhow::ensure!(
+            signature.len() == 64 && signature.bytes().all(|b| b.is_ascii_hexdigit()),
+            "BYOS 运行证书指纹无效"
+        );
+        if self.dex_files.is_empty() {
+            anyhow::bail!("没有 DEX 文件可打包");
+        }
+        let sig_bytes = signature.as_bytes();
+        if sig_bytes.len() > u8::MAX as usize {
+            anyhow::bail!("签名指纹长度不能超过255字节");
+        }
+        let token_bytes = token_id.as_bytes();
+        if token_bytes.len() > u16::MAX as usize {
+            anyhow::bail!("token_id 过长");
+        }
+        let url_bytes = server_url.as_bytes();
+        if url_bytes.len() > u16::MAX as usize {
+            anyhow::bail!("server_url 过长");
+        }
+
+        let mut build_id = [0u8; 16];
+        rand::rng().fill_bytes(&mut build_id);
+        let mut nonce = [0u8; 12];
+        rand::rng().fill_bytes(&mut nonce);
+        let derived_key = crypto::derive_key(ikm, &nonce, sig_bytes);
+
+        let plaintext = self.build_payload()?;
+
+        let dex_count = self.dex_files.len() as u32;
+        // v7 头部：magic + version + dex_count + flags + sig_len + signature
+        //   + build_id + token_id_len + token_id + server_url_len + server_url
+        //   + payload_nonce → 密文
+        let mut out = Vec::with_capacity(
+            4 + 4
+                + 4
+                + 4
+                + 1
+                + sig_bytes.len()
+                + 16
+                + 2
+                + token_bytes.len()
+                + 2
+                + url_bytes.len()
+                + 12
+                + plaintext.len()
+                + 16,
+        );
+        out.extend_from_slice(b"DEXB");
+        out.extend_from_slice(&DEXB_VERSION_BYOS.to_le_bytes());
+        out.extend_from_slice(&dex_count.to_le_bytes());
+        out.extend_from_slice(&(self.compression_layers as u32).to_le_bytes());
+        out.push(sig_bytes.len() as u8);
+        out.extend_from_slice(sig_bytes);
+        out.extend_from_slice(&build_id);
+        out.extend_from_slice(&(token_bytes.len() as u16).to_le_bytes());
+        out.extend_from_slice(token_bytes);
+        out.extend_from_slice(&(url_bytes.len() as u16).to_le_bytes());
+        out.extend_from_slice(url_bytes);
+        out.extend_from_slice(&nonce);
+        // v7 将头部纳入 AEAD 认证，拒绝替换端点、令牌及格式字段。
+        let ciphertext = crypto::encrypt_with_aad(&plaintext, &derived_key, &nonce, &out);
+        out.extend_from_slice(&ciphertext);
+
+        let mut file = fs::File::create(output_path)
+            .with_context(|| format!("无法创建输出文件: {:?}", output_path))?;
+        file.write_all(&out).context("写入文件失败")?;
+        Ok(())
+    }
+
+    fn build_payload(&self) -> Result<Vec<u8>> {
         let mut encoded = Vec::with_capacity(self.dex_files.len());
         for meta in &self.dex_files {
             let mut data = meta.data.clone();
@@ -118,42 +242,7 @@ impl DexPacker {
             plaintext.extend_from_slice(data);
         }
 
-        let ciphertext = crypto::encrypt(&plaintext, &derived_key, &nonce);
-
-        let dex_count = self.dex_files.len() as u32;
-        // DEXB v6 头部：magic + version + dex_count + flags
-        //   + signature + build_id + wrap_nonce + wrapped_ikm + payload_nonce → 密文。
-        // IKM 仍需在设备侧恢复，但不再以明文形式出现在头部。
-        let mut out = Vec::with_capacity(
-            4 + 4
-                + 4
-                + 4
-                + 1
-                + sig_bytes.len()
-                + 16
-                + 12
-                + 2
-                + wrapped_ikm.len()
-                + 12
-                + ciphertext.len(),
-        );
-        out.extend_from_slice(b"DEXB");
-        out.extend_from_slice(&6u32.to_le_bytes());
-        out.extend_from_slice(&dex_count.to_le_bytes());
-        out.extend_from_slice(&(self.compression_layers as u32).to_le_bytes());
-        out.push(sig_bytes.len() as u8);
-        out.extend_from_slice(sig_bytes);
-        out.extend_from_slice(&build_id);
-        out.extend_from_slice(&wrap_nonce);
-        out.extend_from_slice(&(wrapped_ikm.len() as u16).to_le_bytes());
-        out.extend_from_slice(&wrapped_ikm);
-        out.extend_from_slice(&nonce);
-        out.extend_from_slice(&ciphertext);
-
-        let mut file = fs::File::create(output_path)
-            .with_context(|| format!("无法创建输出文件: {:?}", output_path))?;
-        file.write_all(&out).context("写入文件失败")?;
-        Ok(())
+        Ok(plaintext)
     }
 }
 

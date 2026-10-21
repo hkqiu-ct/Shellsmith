@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/kairowan/Shellsmith/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/kairowan/Shellsmith/actions/workflows/ci.yml)
 [![许可证](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square)](#许可证)
 
-在本机完成 Android APK/AAB 与 iOS 源码工程的加固、签名和产物验证，加固与签名材料始终不出本机。
+默认离线模式下在本机完成 Android APK/AAB 与 iOS 源码工程的加固、签名和产物验证，加固与签名材料不出本机。显式启用 BYOS 包外密钥时，产物 IKM 只会发送到你配置的自建 HTTPS 服务，不经过 Shellsmith 维护者。
 
 - **Android**：DEX 加密与运行时保护，重新打包、对齐并按需签名。
 - **iOS**：选择性 Swift 字符串保护、freeRASP 运行时检测，配合 Apple 原生 Archive、导出与签名验证。
@@ -20,11 +20,61 @@
 ## 核心能力
 
 - **DEX 加固与运行时保护**：加密业务 DEX，绑定原签名证书；提供基础反调试和可选的严格保护。
+- **BYOS 包外密钥**：DEXB v7 产物只携带服务地址和 token，启动时从自建 HTTPS 服务取回 IKM；支持设备批准和 Google Play Integrity，服务端可用本机主密钥、AWS KMS、GCP KMS 或 PKCS#11 HSM。
 - **iOS 源码保护**：在独立工作副本中接入 Swift Confidential 与 freeRASP，再用 `xcodebuild` 完成 Archive、导出和签名验证。
 - **加固签名一体化**：证书导入、新建与管理，加固后自动签名，也支持独立签名。
 - **加固前风险检查与失败诊断**：检查签名、已有加固、系统要求、ABI 等兼容信号；失败时给出脱敏诊断摘要，可预览并确认发送错误报告。
 - **省去重复配置**：记住常用加固选项和加固页证书选择，可调整输出目录与文件名，任务开始后固定本次配置。
 - **安装与系统兼容**：处理 APK ZIP 对齐及常见 Native 库兼容问题；标准模式与 Android 4.4 工控模式分开选择。
+
+## BYOS 包外密钥
+
+BYOS（Bring Your Own Server）把产物 IKM 从 APK 中移出，适合需要自行保管密钥、控制设备授权和撤销发布权限的应用。
+
+加固时 Shellsmith 为每个产物生成独立 32 字节 IKM，调用自建服务端的注册接口换取 `token_id`。APK 只携带服务地址和 token，不携带 IKM。应用启动时，客户端生成一次性 RSA 密钥对，带上 token、设备证明或 Play Integrity 证明请求 IKM；服务端验证授权、防重放和设备/Play 状态后，用本次请求的 RSA 公钥加密 `digest[32] || IKM[32]` 返回。客户端解密并校验摘要后才加载业务代码。
+
+### 授权方式
+
+| 方式 | 适用场景 | 要求 |
+|---|---|---|
+| `device_approval` | 国内、侧载、自有分发 | 设备 EC P-256 公钥登记，管理员批准；Android 8.0+（`minSdk 26`） |
+| `play_integrity` | Google Play 分发 | Play Console 与 Google Cloud 服务账号；Android 10+（`minSdk 29`） |
+
+两种方式都不会在失败时回退到离线加载。未知设备只登记为待批准并拒绝；Play 证明失败也不会切换到设备授权。
+
+### 使用流程
+
+1. 按协议部署自建 HTTPS 服务端，创建应用策略和构建 API key。源码构建需分别生成设备授权和 Play 资源：`make build-byos`、`make build-byos-play`；正式发布包已包含对应资源。
+2. 在 Shellsmith 的“密钥交付 → 新增服务”中填写 HTTPS 基础地址、构建 API key、授权方式和最终证书 SHA-256。
+3. 测试连接，加固并签名 APK。每个产物注册后获得新的 `token_id`。
+4. 设备模式首次启动会被拒绝，管理员在服务端批准设备后重新启动；Play 模式使用 Play 测试轨道 APK 验证。
+5. 撤销设备或产物后，后续取钥失败；已经进入进程的 IKM 和明文代码无法远程收回。
+
+### 服务端参考实现
+
+Shellsmith 不托管 BYOS 服务端。仓库提供一份可独立部署的 Go/PostgreSQL 参考实现，包含设备批准、Play Integrity、防重放、审计、主密钥轮换和 `migrate-backend` 迁移，并支持：
+
+- 本机 `local_aead` 主密钥
+- AWS KMS
+- GCP KMS（含 Cloud HSM）
+- PKCS#11 HSM
+
+参考实现和完整部署步骤见[服务端参考实现](docs/design/byos-key-server-reference.md)。
+
+### 安全边界
+
+- BYOS 让 APK 本身不含 IKM，降低仅凭 APK 离线恢复业务密钥的风险；它不等于 DRM，也不能阻止已授权进程的内存提取、Hook 或二次打包分析。
+- 服务端是信任根。服务端、KMS 或 HSM 被攻破后，攻击者可以解封 IKM；必须按服务端文档保护数据库、主密钥、KMS/HSM 权限和备份。
+- 每次启动仍需取钥，DEX 缓存启动也不例外；没有网络或服务端不可用时不会回退到离线加载。
+- 构建 API key 只用于加固注册，不进入 APK，也不具备运行时授权能力。
+- AAB、iOS 和 Android 4.4 兼容模式不支持 BYOS。
+
+### 文档入口
+
+- [BYOS HTTPS 密钥服务接入协议](docs/design/byos-key-server.md)
+- [BYOS 密钥服务端参考实现](docs/design/byos-key-server-reference.md)
+- [BYOS 本地验证与排障记录](docs/process/byos-local-validation.md)
+- [技术内参中的 DEXB 边界](docs/design/internals.md)
 
 ## 下载与快速开始
 
@@ -93,6 +143,7 @@ xattr -rd com.apple.quarantine /Applications/Shellsmith.app
 | Android 5.0 及以上 | API 21+，支持 `armeabi-v7a`、`arm64-v8a`、`x86`、`x86_64`；不要求每个 APK 都包含四种架构 |
 | Android 4.4 工控兼容 | API 19+；只接受无 Native 库或 Native 库仅含 `armeabi-v7a` 的 APK；真机验证范围为 Android 4.4.2、`armeabi-v7a`/NEON 工控设备 |
 | iOS 源码工程 | iOS 13+；SwiftUI/UIKit 应用 target；Archive、导出与签名仅支持安装完整 Xcode 的 macOS |
+| BYOS 包外密钥 | 仅 Android APK；`device_approval` 要求 `minSdk 26+`，`play_integrity` 要求 `minSdk 29+`；需要可用的自建 HTTPS 服务和网络；AAB、iOS、Android 4.4 兼容模式不支持 |
 
 ### 不支持与不会做的事
 
@@ -102,6 +153,7 @@ xattr -rd com.apple.quarantine /Applications/Shellsmith.app
 - 不会为缺失架构生成业务库。
 - GUI 一次处理一个 APK 或 AAB，暂不提供批量队列。
 - Swift Confidential 仅处理 Swift 源码；Objective-C 工程可接入 RASP，但不做字符串保护，请勿提供 `confidential.yml`。
+- BYOS 只支持 Android APK；没有自建 HTTPS 服务和可用网络时，BYOS 产物无法启动，也不会回退到离线加载。
 
 ### 需要自行验证
 
@@ -122,7 +174,9 @@ xattr -rd com.apple.quarantine /Applications/Shellsmith.app
 
 加固时读取原签名证书，压缩并加密 DEX，注入壳资源，再重新打包、对齐并按需签名。运行时由壳执行安全检查、校验或解密 DEX 缓存，加载业务代码并启动原应用。
 
-DEXB 载荷的加密**不提供针对静态分析的机密性**：包裹密钥的两个输入（签名证书指纹与 build_id）都写在包内头部，仅凭 APK 文件本身即可还原密钥，并进一步解出全部业务 DEX 与 PVM2、加密 assets、业务 `.text` 的派生密钥。该层提供的是「改包重签后无法运行」以及提高自动化扫描与逆向的成本。真正的载荷保密需要包外秘密（设备侧不可提取密钥或服务端下发密钥），当前未实现，详见[技术内参](docs/design/internals.md)的「DEXB v6 的机密性边界」。
+默认离线链路的 DEXB v6 载荷加密**不提供针对静态分析的机密性**：包裹密钥的两个输入（签名证书指纹与 build_id）都写在包内头部，仅凭 APK 文件本身即可还原密钥，并进一步解出全部业务 DEX 与 PVM2、加密 assets、业务 `.text` 的派生密钥。该层提供的是「改包重签后无法运行」以及提高自动化扫描与逆向的成本。
+
+BYOS 产物使用 DEXB v7：APK 头部只保存 `server_url` 和 `token_id`，IKM 由服务端保管并在启动时按授权下发，因此仅凭 APK 不能还原 IKM。已授权进程仍会在内存中持有 IKM 和明文代码，撤销只影响后续取钥；详见[BYOS 接入协议](docs/design/byos-key-server.md)和[技术内参](docs/design/internals.md)。
 
 当前正式方案会在应用私有目录使用解密后的 DEX 缓存，**不是完整内存 DEX 或方法代码抽取方案**。Root、进程控制或其他高权限环境下，攻击者仍可能提取运行时代码。标准保护不因 Root 信号拒绝启动；严格保护可阻断部分风险环境，但无法保证识别隐藏 Root 或抵御绕过。
 
@@ -134,12 +188,13 @@ iOS 流水线只改工作副本：接入精确版本的上游 Swift Package，�
 
 ## 隐私说明
 
-APK、证书、密钥库和签名密码只在本机处理，不上传业务文件。桌面工具有以下独立数据通道：
+默认离线模式下，APK、证书、密钥库和签名密码只在本机处理，不上传业务文件。显式启用 BYOS 时，产物 IKM 和构建凭据只发送到你配置的自建 HTTPS 服务，不发送给 Shellsmith 维护者。桌面工具有以下独立数据通道：
 
 | 通道 | 数据与控制方式 |
 |---|---|
 | 安全错误报告 | 每份报告先预览、再确认发送；不上传原始日志、APK、路径、包名、证书或密码，独立于其他数据通道 |
 | 应用使用分享 | 加固/签名页控制，新包名默认选中，同包名取消后跨页及重启保持；成功时发送应用名称、包名、版本码、工具版本、操作、流程、成功日期及协议/去重信息，不带设备标识 |
+| BYOS 包外密钥 | 仅在加固配置中显式启用；向用户填写的 HTTPS 服务发送构建凭据和产物 IKM 用于注册/取钥，数据由用户自己的服务端控制 |
 
 应用分享仅维护者可见，明细保留 180 天；取消停止同包名后续分享，不删除已接收记录。**加固后的 APK 不包含这些分享上报。** 数据范围、保留与删除说明见[数据与隐私说明](docs/ops/telemetry.md)。
 
@@ -162,6 +217,9 @@ iOS balanced/strict 会让目标应用直接集成 freeRASP；其 `watcherMail`�
 | 从源码编译 | [构建指南](docs/ops/build.md)、[环境要求](docs/ops/environment.md) |
 | 模块结构、原理与设计 | [文档导航](docs/README.md) |
 | iOS 接入、配置与安全边界 | [iOS 加固实现](docs/design/ios-hardening.md) |
+| BYOS 接入协议、错误码与测试向量 | [BYOS HTTPS 密钥服务](docs/design/byos-key-server.md) |
+| BYOS 服务端部署、KMS/HSM 与运维 | [服务端参考实现](docs/design/byos-key-server-reference.md) |
+| BYOS 本地验证与真实设备排障 | [本地验证记录](docs/process/byos-local-validation.md) |
 | 后续规划 | [路线图](docs/process/roadmap.md) |
 
 CLI 仅供源码构建和自动化使用，Release 不单独提供 CLI 包。构建顺序为先 `make build-stub`，再 `make build-cli` 或 `make build-gui`；完整依赖与平台步骤以构建指南为准。

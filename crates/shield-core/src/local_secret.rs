@@ -8,6 +8,28 @@ use sha2::{Digest, Sha256};
 use std::{env, path::Path};
 const SECRET_PREFIX: &str = "enc:v1:";
 
+/// 新凭据使用独立随机存储密钥；缺失或损坏时不得替换已有密钥。
+pub fn load_storage_key(path: &Path, create: bool) -> Result<[u8; 32], String> {
+    if create && !path.exists() {
+        use std::io::Write;
+        let parent = path.parent().ok_or("本地密钥目录无效")?;
+        let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|_| "创建本地密钥失败")?;
+        let mut key = [0; 32];
+        rand::rng().fill_bytes(&mut key);
+        file.write_all(&key).map_err(|_| "写入本地密钥失败")?;
+        file.as_file().sync_all().map_err(|_| "保存本地密钥失败")?;
+        if let Err(error) = file.persist_noclobber(path) {
+            if error.error.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err("保存本地密钥失败".into());
+            }
+        }
+    }
+    std::fs::read(path)
+        .map_err(|_| "本地凭据密钥缺失，请恢复密钥备份")?
+        .try_into()
+        .map_err(|_| "本地凭据密钥损坏，请恢复密钥备份".into())
+}
+
 pub fn derive_crypto_key(db_path: &Path, keystore_dir: &Path) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"mocika-shield-gui-cert-store-v1");
@@ -88,5 +110,31 @@ fn decode_hex_nibble(byte: u8) -> Result<u8, String> {
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err("本地秘密字段包含非法 hex 字符".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod storage_key_tests {
+    #[test]
+    fn key_is_random_persistent_and_never_repairs_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key");
+        assert!(super::load_storage_key(&path, false).is_err());
+        let key = super::load_storage_key(&path, true).unwrap();
+        assert_eq!(key, super::load_storage_key(&path, true).unwrap());
+        assert_ne!(
+            key,
+            super::load_storage_key(&dir.path().join("other"), true).unwrap()
+        );
+        std::fs::write(&path, b"broken").unwrap();
+        assert!(super::load_storage_key(&path, true).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 }

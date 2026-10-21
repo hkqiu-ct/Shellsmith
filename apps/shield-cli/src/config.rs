@@ -73,6 +73,10 @@ impl CliConfig {
 
     pub(crate) fn merge_protect(&self, args: ProtectArgs) -> Result<ResolvedProtectArgs> {
         Ok(ResolvedProtectArgs {
+            byos_endpoint: args.byos_endpoint,
+            byos_api_key: args.byos_api_key,
+            byos_auth: args.byos_auth,
+            runtime_cert_sha256: args.runtime_cert_sha256,
             runtime_ui: args.runtime_ui.resolve(self.protect.runtime_ui.clone())?,
             ui_packer: args
                 .runtime_ui
@@ -165,6 +169,10 @@ impl CliConfig {
 }
 
 pub(crate) struct ResolvedProtectArgs {
+    pub byos_endpoint: Option<String>,
+    pub byos_api_key: Option<String>,
+    pub byos_auth: Option<shield_core::ByosAuth>,
+    pub runtime_cert_sha256: Option<String>,
     pub runtime_ui: shield_core::RuntimeUiProtection,
     pub ui_packer: Option<PathBuf>,
     pub excluded_abis: Vec<String>,

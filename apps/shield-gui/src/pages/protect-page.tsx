@@ -1,4 +1,4 @@
-import { defaultRuntimeUi } from "@/lib/tauri";
+import { byosRequirements, defaultRuntimeUi } from "@/lib/tauri";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Clipboard, FolderOpen, RotateCcw, Square } from "lucide-react";
 import { AppButton, DropZone, SelectedApkCard, StatusMessage, TextInput } from "@/components/app/common";
@@ -82,6 +82,7 @@ export function ProtectPage({
   }
 
   function restoreRecommended() {
+    workflow.setByosProfile(null);
     workflow.setPvm2RequiredMethods("");
     const recommended: ProtectDefaults = {
       runtime_ui: defaultRuntimeUi,
@@ -124,7 +125,7 @@ export function ProtectPage({
   const pvmPrefixesValid = workflow.xopTrueVmpPrefixes.every((prefix) => prefix.length >= 6 && prefix.startsWith("L") && (prefix.endsWith("/") || prefix.endsWith(";")) && !prefix.includes(".."));
   const pvmJavaReady = (buildInfo?.java_major ?? 0) >= (buildInfo?.xop_pvm2_min_java_major ?? 17);
   const pvmReady = workflow.runtimeMode === "standard" && hasPvmPacker && hasPvmSelection && pvmPrefixesValid && pvmJavaReady;
-  const usingRecommendedProtection = workflow.runtimeMode === "standard"
+  const usingRecommendedProtection = !workflow.byosProfile && workflow.runtimeMode === "standard"
     && workflow.environmentPolicy === "compatible"
     && workflow.protectionProfile === "balanced"
     && workflow.aiResistance === "balanced"
@@ -132,7 +133,9 @@ export function ProtectPage({
     && !hasPvmSelection
     && JSON.stringify(workflow.runtimeUi) === JSON.stringify(defaultRuntimeUi);
   const pvmConfigurationIncomplete = (hasCustomPvmPacker && !hasPvmSelection) || (hasPvmSelection && !hasPvmPacker);
-  const startDisabled = workflow.sharing.pending || !runtimeInfoLoaded || !workflow.preflight || Boolean(workflow.precheck) || workflow.state === "prechecking"
+  const byosRequired = workflow.byosProfile ? byosRequirements[workflow.byosProfile.authMode] : null;
+  const byosIncompatible = byosRequired && (workflow.runtimeMode !== "standard" || (workflow.preflight?.facts.min_sdk ?? 0) < byosRequired.minSdk);
+  const startDisabled = byosIncompatible || workflow.sharing.pending || !runtimeInfoLoaded || !workflow.preflight || Boolean(workflow.precheck) || workflow.state === "prechecking"
     || workflow.preflight?.verdict === "blocked"
     || Boolean(workflow.outputFilenameError) || (signAfterProtect && !signingCertificate)
     || (workflow.outputDirectoryMode === "fixed" && !workflow.fixedOutputDirectory)
@@ -202,6 +205,7 @@ export function ProtectPage({
               {workflow.warning && <StatusMessage kind="warning">{workflow.warning}</StatusMessage>}
               {workflow.precheck && <StatusMessage kind="error"><b>{t(locale, "precheckFailed")}：</b>{workflow.precheck}</StatusMessage>}
               {workflow.state === "done" && <StatusMessage kind="success" action={<AppButton size="sm" variant="secondary" onClick={() => void api.showInFolder(workflow.output)}><FolderOpen className="h-4 w-4" />{t(locale, "showInFolder")}</AppButton>}>{t(locale, "done")}</StatusMessage>}
+              {byosIncompatible && <StatusMessage kind="warning">{locale === "zh" ? `所选 BYOS 配置要求 APK 的 minSdkVersion 至少为 ${byosRequired.minSdk}（${byosRequired.platform}），并使用标准运行时。请选择符合条件的 APK，或切回本地离线。` : `Selected BYOS mode requires minSdkVersion ${byosRequired.minSdk} (${byosRequired.platform}) and the standard runtime. Choose a compatible APK or switch to offline mode.`}</StatusMessage>}
               {workflow.error && <StatusMessage kind="error" action={<AppButton size="sm" variant="secondary" onClick={copyDiagnostic}><Clipboard className="h-4 w-4" />{diagnosticCopyLabel}</AppButton>}><b>{t(locale, "errorDetail")}：</b>{workflow.error}</StatusMessage>}
             </div>
             {workflow.showProgress ? (
@@ -211,6 +215,7 @@ export function ProtectPage({
               </div>
             ) : (
               <ProtectConfigurationPanel
+                byosProfile={workflow.byosProfile} onByosProfileChange={workflow.setByosProfile}
                 runtimeUi={workflow.runtimeUi}
                 onRuntimeUiChange={(value) => { workflow.setRuntimeUi(value); updateDefaults({ runtime_ui: value }); }}
                 locale={locale} disabled={locked} startDisabled={startDisabled}

@@ -33,11 +33,12 @@ fn main() {
     // Tauri 上下文需要可读取的运行时图标；使用正式品牌图标而非 1px 占位图。
     fs::write(&icon_path, APP_ICON_PNG).expect("写入应用图标失败");
 
-    let tauri_config = serde_json::json!({
-        "bundle": {
-            "icon": [icon_path]
-        }
-    });
+    // 保留 CLI 的应用标识等覆盖配置，否则独立测试包会误用正式版数据目录。
+    let mut tauri_config: serde_json::Value = env::var("TAURI_CONFIG")
+        .map(|value| serde_json::from_str(&value).expect("TAURI_CONFIG 必须为合法 JSON"))
+        .unwrap_or_else(|_| serde_json::json!({}));
+    tauri_config["bundle"]["icon"] = serde_json::json!([icon_path]);
+    println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
 
     println!("cargo:rustc-env=TAURI_CONFIG={}", tauri_config);
 

@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/kairowan/Shellsmith/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/kairowan/Shellsmith/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square)](#license)
 
-Protect Android APK/AAB outputs and iOS source projects, and verify the resulting artifacts, entirely on your own machine. APKs and signing materials never leave it.
+By default, protect Android APK/AAB outputs and iOS source projects, and verify the resulting artifacts, entirely on your own machine; APKs and signing materials do not leave it. When BYOS out-of-package keys are explicitly enabled, the artifact IKM is sent only to the self-hosted HTTPS service you configure, never to Shellsmith maintainers.
 
 - **Android:** DEX encryption and runtime protection, then repackaging, alignment, and optional signing.
 - **iOS:** selected Swift literal protection and freeRASP runtime checks, combined with Apple's native archive, export, and signature verification.
@@ -20,11 +20,61 @@ The recommended desktop GUI supports Windows, macOS, Linux, and Chinese/English 
 ## Core Capabilities
 
 - **DEX and runtime protection:** encrypt application DEX files, bind them to the original certificate, and apply baseline anti-debugging or optional strict environment checks.
+- **BYOS out-of-package keys:** DEXB v7 artifacts carry only the service URL and token; the IKM is fetched from your self-hosted HTTPS service at launch. Device approval and Google Play Integrity are supported, with a local master key, AWS KMS, GCP KMS, or PKCS#11 HSM backend.
 - **iOS source protection:** modify an isolated working copy with Swift Confidential and freeRASP, then archive, export, and verify it with `xcodebuild`.
 - **Integrated signing:** import, create, and manage certificates; automatically sign protected output or sign an APK independently.
 - **Preflight checks and failure diagnostics:** inspect signatures, existing protection, system requirements, and ABIs; on failure, show a sanitized diagnostic summary that can be previewed and submitted as an error report.
 - **Reusable settings:** remember protection options and the protection page's certificate choice, customize output directory and filename, and freeze each running task's configuration.
 - **Installation compatibility:** handle APK ZIP alignment and common native-library cases, with separate standard and Android 4.4 industrial modes.
+
+## BYOS Out-of-Package Keys
+
+BYOS (Bring Your Own Server) moves the artifact IKM out of the APK. It is intended for teams that manage their own keys, device authorization, and revocation policy.
+
+During protection, Shellsmith generates an independent 32-byte IKM for each artifact and registers it with your self-hosted service in exchange for a `token_id`. The APK carries only the service URL and token, not the IKM. At launch, the client generates an ephemeral RSA key pair and requests the IKM with the token plus a device proof or Play Integrity proof. After validating authorization, replay protection, and the device or Play result, the server encrypts `digest[32] || IKM[32]` to the request's RSA public key and returns it. The client decrypts and verifies the digest before loading business code.
+
+### Authorization Modes
+
+| Mode | Use case | Requirements |
+|---|---|---|
+| `device_approval` | Domestic distribution, sideloading, private channels | Device EC P-256 public-key registration and administrator approval; Android 8.0+ (`minSdk 26`) |
+| `play_integrity` | Google Play distribution | Play Console and a Google Cloud service account; Android 10+ (`minSdk 29`) |
+
+Neither mode falls back to offline loading on failure. An unknown device is recorded as pending and denied; a failed Play check never switches to device approval.
+
+### Workflow
+
+1. Deploy the self-hosted HTTPS service, create an application policy, and create a build API key. Source builds must generate the device-approval and Play resources separately with `make build-byos` and `make build-byos-play`; release packages include the matching resources.
+2. In Shellsmith, open **Key Delivery → Add Service** and fill in the HTTPS base URL, build API key, authorization mode, and final certificate SHA-256.
+3. Test the connection, then protect and sign the APK. Each artifact receives a new `token_id`.
+4. In device mode, the first launch is denied until an administrator approves the device; in Play mode, validate with a Play test-track APK.
+5. Revoking a device or artifact blocks future fetches. IKM and plaintext code already loaded into a running process cannot be recalled remotely.
+
+### Server Reference
+
+Shellsmith does not host the BYOS service. The repository documents a separately deployable Go/PostgreSQL reference implementation with device approval, Play Integrity, replay protection, auditing, master-key rotation, and `migrate-backend` migration. It supports:
+
+- Local `local_aead` master keys
+- AWS KMS
+- GCP KMS (including Cloud HSM)
+- PKCS#11 HSM
+
+See the [server reference implementation](docs/design/byos-key-server-reference.md) for deployment and operations.
+
+### Security Boundaries
+
+- BYOS keeps the IKM out of the APK and reduces offline key recovery from the package. It is not DRM and cannot prevent memory extraction, hooking, or further analysis of an authorized process.
+- The server is the trust root. If the server, KMS, or HSM is compromised, an attacker can unseal the IKM. Protect the database, master keys, KMS/HSM permissions, and backups as described in the server documentation.
+- The key is still fetched on every launch, including cache-based launches; there is no offline fallback when the network or service is unavailable.
+- The build API key is only for protection-time registration. It is not included in the APK and does not grant runtime authorization.
+- AAB, iOS, and Android 4.4 compatibility mode do not support BYOS.
+
+### Documentation
+
+- [BYOS HTTPS Key Service Protocol](docs/design/byos-key-server.md)
+- [BYOS Key Server Reference](docs/design/byos-key-server-reference.md)
+- [BYOS Local Validation and Troubleshooting](docs/process/byos-local-validation.md)
+- [DEXB boundaries in the technical internals](docs/design/internals.md)
 
 ## Download and Quick Start
 
@@ -93,6 +143,7 @@ The screenshot illustrates the layout; available options depend on the current v
 | Android 5.0 and later | API 21+; `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`. An APK does not need all four ABIs |
 | Android 4.4 industrial | API 19+; inputs must have no native libraries or only `armeabi-v7a` libraries. Physical-device coverage is an Android 4.4.2 `armeabi-v7a`/NEON industrial device |
 | iOS source project | iOS 13+ SwiftUI/UIKit application targets; archive, export, and signing require macOS with full Xcode |
+| BYOS out-of-package keys | Android APK only; `device_approval` requires `minSdk 26+`, `play_integrity` requires `minSdk 29+`; requires a reachable self-hosted HTTPS service and network; AAB, iOS, and Android 4.4 compatibility mode are not supported |
 
 ### Not Supported
 
@@ -102,6 +153,7 @@ The screenshot illustrates the layout; available options depend on the current v
 - Missing business libraries are not generated.
 - The GUI processes one APK or AAB at a time; no batch queue is provided.
 - Swift Confidential only processes Swift source. Objective-C projects can use RASP but get no literal protection, so do not supply `confidential.yml` for them.
+- BYOS supports Android APKs only. Without a reachable self-hosted HTTPS service and network, a BYOS artifact cannot start and does not fall back to offline loading.
 
 ### Requires Your Own Validation
 
@@ -122,7 +174,9 @@ See the [usage guide](docs/usage.md) for detailed boundaries.
 
 Protection reads the original certificate, compresses and encrypts DEX files, injects the stub, then rebuilds, aligns, and optionally signs the APK. At runtime, the stub checks the environment, validates or decrypts the DEX cache, loads code, and starts the original application.
 
-DEXB payload encryption **does not provide confidentiality against static analysis**: both inputs of the envelope key (the signing certificate fingerprint and the build ID) are stored in cleartext in the package header, so the key can be recovered from the APK file alone, and with it the derived keys for every business DEX, the PVM2 images, encrypted assets and business `.text`. What it does provide is refusal to run after re-signing, plus a higher cost for automated scanning and reverse engineering. Real payload confidentiality would require an out-of-package secret (a non-exportable device key or a server-issued key), which is not implemented today; see the confidentiality boundary section in [docs/design/internals.md](docs/design/internals.md).
+The default offline DEXB v6 payload encryption **does not provide confidentiality against static analysis**: both inputs of the envelope key (the signing certificate fingerprint and the build ID) are stored in cleartext in the package header, so the key can be recovered from the APK file alone, and with it the derived keys for every business DEX, the PVM2 images, encrypted assets and business `.text`. What it does provide is refusal to run after re-signing, plus a higher cost for automated scanning and reverse engineering.
+
+BYOS artifacts use DEXB v7: the APK header stores only `server_url` and `token_id`; the IKM remains on the server and is released after authorization, so the APK alone cannot recover it. An authorized process still holds the IKM and plaintext code in memory, and revocation affects only future fetches. See the [BYOS protocol](docs/design/byos-key-server.md) and [technical internals](docs/design/internals.md).
 
 Production uses a decrypted DEX cache in the application's private directory. It is **not a fully in-memory DEX loader or method-code extraction scheme**. Root access, process control, or other elevated privileges may allow runtime code extraction. Standard protection does not block startup solely because of root signals; strict protection blocks some risky environments but cannot guarantee detection of hidden root or prevent bypasses.
 
@@ -134,12 +188,13 @@ Hardening does not replace server-side authorization, key management, or applica
 
 ## Privacy
 
-APKs, certificates, keystores, and signing passwords are processed locally and not uploaded. The desktop tool has the following independent data channels:
+In the default offline mode, APKs, certificates, keystores, and signing passwords are processed locally and not uploaded. When BYOS is explicitly enabled, the artifact IKM and build credential are sent only to the self-hosted HTTPS service you configure, not to Shellsmith maintainers. The desktop tool also has the following independent data channels:
 
 | Channel | Data and controls |
 |---|---|
 | Safe error reports | Preview and confirm each report; no raw logs, APKs, paths, package names, certificates, or passwords. Independent of the other channels |
 | Per-app usage sharing | Controlled on protection/signing pages, selected by default for new package names. Opt-outs persist across pages and restarts. Successful operations send app name, package name, version code, tool version, operation, flow, success date, and protocol/deduplication metadata; no device identifier |
+| BYOS out-of-package keys | Enabled only by an explicit protection setting. Sends the build credential and artifact IKM to the HTTPS service you provide for registration and key fetch; the data is controlled by your service |
 
 App sharing is maintainer-only and retained for 180 days. Opting out stops future sharing for that package but does not delete received records. **These reporting features are not injected into protected APKs.** See [data and privacy documentation](docs/ops/telemetry.md) for scope, retention, and deletion details.
 
@@ -162,6 +217,9 @@ The iOS balanced and strict profiles integrate freeRASP directly into the target
 | Source builds | [Build guide](docs/ops/build.md), [environment requirements](docs/ops/environment.md) |
 | Architecture and internals | [Documentation index](docs/README.md) |
 | iOS integration, configuration, and security scope | [iOS hardening](docs/design/ios-hardening.md) |
+| BYOS protocol, error codes, and test vectors | [BYOS HTTPS Key Service](docs/design/byos-key-server.md) |
+| BYOS server deployment, KMS/HSM, and operations | [Server reference](docs/design/byos-key-server-reference.md) |
+| BYOS local validation and real-device troubleshooting | [Local validation](docs/process/byos-local-validation.md) |
 | Future work | [Roadmap](docs/process/roadmap.md) |
 
 The CLI is source-built; Releases contain desktop GUI packages only. Build `make build-stub` first, then `make build-cli` or `make build-gui`. Refer to the build guide for dependencies and platform-specific steps.

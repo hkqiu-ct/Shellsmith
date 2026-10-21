@@ -76,7 +76,9 @@ check_deps() {
 build_stub() {
   info "构建 shield-stub（resources.zip）..."
   cd "$ROOT"
-  SHIELD_VERSION="$VERSION" bash scripts/build-stub.sh
+  SHIELD_VERSION="$VERSION" MOCIKA_BYOS_RUNTIME=1 bash scripts/build-stub.sh
+  SHIELD_VERSION="$VERSION" MOCIKA_BYOS_RUNTIME=1 MOCIKA_BYOS_PLAY_INTEGRITY=1 bash scripts/build-stub.sh
+  SHIELD_VERSION="$VERSION" MOCIKA_BYOS_RUNTIME=0 MOCIKA_BYOS_PLAY_INTEGRITY=0 bash scripts/build-stub.sh
   SKIP_STANDARD_STUB_BUILD=1 bash scripts/build-android-api19-resources.sh
   RESOURCES_ZIP="$ROOT/shield-stub/build/outputs/resources/resources.zip"
   if [[ ! -f "$RESOURCES_ZIP" ]]; then
@@ -163,6 +165,8 @@ package_cli() {
   # runtime resources
   cp "$ROOT/shield-stub/build/outputs/resources/resources.zip" "$CLI_PKG_DIR/resources/resources.zip"
   cp "$ROOT/shield-stub/build/outputs/resources/resources-api19.zip" "$CLI_PKG_DIR/resources/resources-api19.zip"
+  cp "$ROOT/shield-stub/build/outputs/resources/resources-byos.zip" "$CLI_PKG_DIR/resources/"
+  cp "$ROOT/shield-stub/build/outputs/resources/resources-byos-play.zip" "$CLI_PKG_DIR/resources/"
   cp "$ROOT/shield-stub/build/outputs/resources/mocika-play-delivery-api.jar" "$CLI_PKG_DIR/resources/mocika-play-delivery-api.jar"
 
   # 启动脚本

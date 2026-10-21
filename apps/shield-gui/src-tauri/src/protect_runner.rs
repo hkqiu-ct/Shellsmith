@@ -89,6 +89,7 @@ fn resolve_xop_pvm2_packer(
 }
 
 pub(crate) struct ProtectExecution {
+    pub(crate) byos: Option<crate::byos::SavedProfile>,
     pub(crate) runtime_ui: shield_core::RuntimeUiProtection,
     pub(crate) excluded_abis: Vec<String>,
     pub(crate) task_id: String,
@@ -124,7 +125,20 @@ pub(crate) async fn execute_protect_apk(
         .or_else(|| find_apktool_path(&app));
 
     let resolved_resources = match request.runtime_mode {
-        RuntimeMode::Standard => find_resources_path(&app),
+        RuntimeMode::Standard => match &request.byos {
+            Some(saved) => Some(
+                find_named_resources_path(
+                    &app,
+                    if saved.profile.auth_mode == "device_approval" {
+                        "resources-byos.zip"
+                    } else {
+                        "resources-byos-play.zip"
+                    },
+                )
+                .ok_or_else(|| "缺少对应 BYOS 资源，请使用完整安装包".to_string())?,
+            ),
+            None => find_resources_path(&app),
+        },
         RuntimeMode::AndroidApi19 => {
             let checked = shield_core::check_apk(
                 std::path::Path::new(&request.input),
@@ -176,6 +190,14 @@ pub(crate) async fn execute_protect_apk(
                 ExecutionFailure::diagnosed(err.to_string(), Diagnostic::from_error(&err))
             })?;
         let opts = ProtectOptions {
+            byos_endpoint: request.byos.as_ref().map(|v| v.profile.endpoint.clone()),
+            byos_api_key: request.byos.as_ref().map(|v| v.api_key.clone()),
+            byos_auth: request
+                .byos
+                .as_ref()
+                .map(|v| v.profile.auth_mode.parse())
+                .transpose()
+                .map_err(str::to_owned)?,
             runtime_ui: request.runtime_ui,
             ui_packer_path: ui_packer,
             excluded_abis: request.excluded_abis,
@@ -185,7 +207,7 @@ pub(crate) async fn execute_protect_apk(
             resources_path: resolved_resources,
             apksigner_path: resolved_apksigner,
             expected_output_cert_fingerprint,
-            runtime_cert_fingerprint: None,
+            runtime_cert_fingerprint: request.byos.and_then(|v| v.profile.runtime_cert),
             environment_policy: match request.environment_policy {
                 EnvironmentPolicyRequest::Compatible => EnvironmentPolicy::Compatible,
                 EnvironmentPolicyRequest::Strict => EnvironmentPolicy::Strict,

@@ -13,7 +13,14 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$OutputDir   = Join-Path $ProjectRoot "shield-stub\build\outputs\resources"
+$byosRuntime = $env:MOCIKA_BYOS_RUNTIME -eq "1"
+$byosPlay = $byosRuntime -and $env:MOCIKA_BYOS_PLAY_INTEGRITY -eq "1"
+$buildName = if ($byosPlay) { "build-byos-play" } elseif ($byosRuntime) { "build-byos" } else { "build" }
+$stubBuildDir = Join-Path $ProjectRoot "shield-stub\$buildName"
+$OutputDir = Join-Path $stubBuildDir "outputs\resources"
+$runtimeMinApi = if ($byosPlay) { 29 } elseif ($byosRuntime) { 26 } else { 21 }
+$byosAuth = if ($byosPlay) { "play_integrity" } elseif ($byosRuntime) { "device_approval" } else { "none" }
+$byosJson = $byosRuntime.ToString().ToLowerInvariant()
 
 if (-not $ShieldVersion) { $ShieldVersion = "1.0.0" }
 
@@ -149,7 +156,7 @@ $gradlew = if (Test-Path (Join-Path $ProjectRoot "shield-stub\gradlew.bat")) {
 }
 Run $gradlew @("--no-daemon", "-p", "shield-stub", "assembleRelease")
 
-$aarFile = Join-Path $ProjectRoot "shield-stub\build\outputs\aar\shield-stub-release.aar"
+$aarFile = Join-Path $stubBuildDir "outputs\aar\shield-stub-release.aar"
 if (-not (Test-Path $aarFile)) { Err "未找到 AAR 文件: $aarFile" }
 Success "AAR 构建完成: $aarFile"
 Write-Host ""
@@ -159,7 +166,14 @@ Write-Host ""
 # ==========================================
 Info "步骤2: 解析 R8 mapping，提取混淆后的类名/方法名..."
 
-$mappingFile = Join-Path $ProjectRoot "shield-stub\build\outputs\mapping\release\mapping.txt"
+if ($byosRuntime) {
+    Run $gradlew @("--no-daemon", "-p", "shield-stub", "exportByosDependencies")
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
+    if (-not $python) { Err "BYOS 构建需要 Python 3" }
+    Run $python.Source @("scripts/prepare-byos-runtime.py", $ProjectRoot, $stubBuildDir, $androidSdk)
+}
+$mappingFile = Join-Path $stubBuildDir "outputs\mapping\release\mapping.txt"
 if (-not (Test-Path $mappingFile)) {
     Err "未找到 R8 mapping 文件: $mappingFile`n  请确认 proguard-rules.pro 已启用混淆且 R8 正常运行"
 }
@@ -318,6 +332,7 @@ try {
 
     $classesJar = Join-Path $tempDir "classes.jar"
     if (-not (Test-Path $classesJar)) { Err "AAR 中未找到 classes.jar" }
+    if ($byosRuntime) { Copy-Item (Join-Path $stubBuildDir "byos-runtime.jar") $classesJar -Force }
 
     # 找最新 build-tools 版本（版本号数字排序）
     $buildToolsDir = Join-Path $androidSdk "build-tools"
@@ -356,7 +371,7 @@ try {
         Run "jar" @("cf", $apiJar, "-C", $apiStage,
             "dev/mocika/shield/loader/MocikaPlayDelivery.class")
         Success "Play Delivery compileOnly API: $apiJar"
-        Run $d8 @("--output", $OutputDir, $classesJar, "--min-api", "21", "--lib", $androidJar)
+        Run $d8 @("--output", $OutputDir, $classesJar, "--min-api", "$runtimeMinApi", "--lib", $androidJar)
     } else {
         Err "未找到 android.jar，无法生成 Play Delivery compileOnly API"
     }
@@ -434,7 +449,10 @@ $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     "x86",
     "x86_64"
   ],
-  "min_android_api": 21,
+  "min_android_api": $runtimeMinApi,
+  "byos_remote_key": $byosJson,
+  "byos_auth": "$byosAuth",
+  "byos_fetch_protocol": 2,
   "target_android_api": 35,
   "native_library": "libmocikashield.so",
   "native_name_placeholder": "mocikanativeslot",
@@ -495,6 +513,15 @@ Success "资源包创建成功"
 Write-Host "  文件: $resourcesZip" -ForegroundColor Green
 Write-Host "  大小: $sizeMB" -ForegroundColor Green
 Success "resources.zip 已更新"
+
+if ($byosRuntime) {
+    $sharedOutput = Join-Path $ProjectRoot "shield-stub\build\outputs\resources"
+    New-Item -ItemType Directory -Path $sharedOutput -Force | Out-Null
+    $byosName = if ($byosPlay) { "resources-byos-play.zip" } else { "resources-byos.zip" }
+    Copy-Item $resourcesZip (Join-Path $sharedOutput $byosName) -Force
+    Success "BYOS 资源已生成: $byosName"
+    return
+}
 
 # 候选资源只通过显式资源路径用于内部回归，不参与自动资源发现。
 $standardMetadata = Get-Content (Join-Path $OutputDir "metadata.json") -Raw

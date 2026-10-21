@@ -24,7 +24,10 @@ mkdir -p "$DIST_DIR"
 
 # 2. 构建 shield-stub
 echo "=> 构建 shield-stub..."
-SHIELD_VERSION="$VERSION" "$PROJECT_ROOT/scripts/build-stub.sh"
+SHIELD_VERSION="$VERSION" MOCIKA_BYOS_RUNTIME=1 MOCIKA_BYOS_PLAY_INTEGRITY=0 "$PROJECT_ROOT/scripts/build-stub.sh"
+SHIELD_VERSION="$VERSION" MOCIKA_BYOS_RUNTIME=1 MOCIKA_BYOS_PLAY_INTEGRITY=1 "$PROJECT_ROOT/scripts/build-stub.sh"
+SHIELD_VERSION="$VERSION" MOCIKA_BYOS_RUNTIME=0 MOCIKA_BYOS_PLAY_INTEGRITY=0 "$PROJECT_ROOT/scripts/build-stub.sh"
+SKIP_STANDARD_STUB_BUILD=1 bash "$PROJECT_ROOT/scripts/build-android-api19-resources.sh"
 echo "✓ shield-stub 构建完成"
 
 # 3. 编译 CLI
@@ -73,6 +76,8 @@ fi
 
 # 6. 复制 runtime resources
 echo "=> 复制 runtime resources..."
+cp "$PROJECT_ROOT/shield-stub/build/outputs/resources/resources-byos.zip" "$RELEASE_DIR/resources/"
+cp "$PROJECT_ROOT/shield-stub/build/outputs/resources/resources-byos-play.zip" "$RELEASE_DIR/resources/"
 RESOURCES_ZIP="$PROJECT_ROOT/shield-stub/build/outputs/resources/resources.zip"
 API19_RESOURCES_ZIP="$PROJECT_ROOT/shield-stub/build/outputs/resources/resources-api19.zip"
 PLAY_DELIVERY_API="$PROJECT_ROOT/shield-stub/build/outputs/resources/mocika-play-delivery-api.jar"

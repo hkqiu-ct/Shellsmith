@@ -115,7 +115,26 @@ fi
 echo -e "${GREEN}✓ Android Rust targets: 全部就绪${NC}"
 
 # 创建输出目录
-OUTPUT_DIR="shield-stub/build/outputs/resources"
+STUB_BUILD_DIR="shield-stub/build"
+RUNTIME_MIN_API=21
+DEX_MIN_API=19
+BYOS_CAPABILITY=false
+BYOS_AUTH=none
+BYOS_RESOURCE=resources-byos.zip
+if [ "${MOCIKA_BYOS_RUNTIME:-0}" = "1" ]; then
+    STUB_BUILD_DIR="shield-stub/build-byos"
+    BYOS_AUTH=device_approval
+    RUNTIME_MIN_API=26
+    if [ "${MOCIKA_BYOS_PLAY_INTEGRITY:-0}" = "1" ]; then
+        STUB_BUILD_DIR="shield-stub/build-byos-play"
+        BYOS_AUTH=play_integrity
+        RUNTIME_MIN_API=29
+        BYOS_RESOURCE=resources-byos-play.zip
+    fi
+    DEX_MIN_API=$RUNTIME_MIN_API
+    BYOS_CAPABILITY=true
+fi
+OUTPUT_DIR="$STUB_BUILD_DIR/outputs/resources"
 mkdir -p "$OUTPUT_DIR"
 echo -e "${GREEN}✓ 创建输出目录: $OUTPUT_DIR${NC}"
 echo ""
@@ -143,14 +162,18 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-AAR_FILE="shield-stub/build/outputs/aar/shield-stub-release.aar"
+AAR_FILE="$STUB_BUILD_DIR/outputs/aar/shield-stub-release.aar"
 if [ ! -f "$AAR_FILE" ]; then
     echo -e "${RED}错误: 未找到AAR文件: $AAR_FILE${NC}"
     exit 1
 fi
 
 # R8 mapping 文件路径（Gradle 固定输出位置）
-MAPPING_FILE="shield-stub/build/outputs/mapping/release/mapping.txt"
+if [ "$BYOS_CAPABILITY" = "true" ]; then
+    "$GRADLE_CMD" --no-daemon -p shield-stub exportByosDependencies
+    python3 scripts/prepare-byos-runtime.py "$PROJECT_ROOT" "$PROJECT_ROOT/$STUB_BUILD_DIR" "$ANDROID_SDK"
+fi
+MAPPING_FILE="$STUB_BUILD_DIR/outputs/mapping/release/mapping.txt"
 if [ ! -f "$MAPPING_FILE" ]; then
     echo -e "${RED}错误: 未找到 R8 mapping 文件: $MAPPING_FILE${NC}"
     echo -e "${YELLOW}  请确认 proguard-rules.pro 已启用混淆且 R8 正常运行${NC}"
@@ -313,6 +336,9 @@ unzip -q "$OLDPWD/$AAR_FILE"
 cd "$OLDPWD"
 
 # 提取classes.jar并转换为DEX
+if [ "$BYOS_CAPABILITY" = "true" ]; then
+    cp "$STUB_BUILD_DIR/byos-runtime.jar" "$TEMP_DIR/classes.jar"
+fi
 echo -e "${YELLOW}提取并转换classes.jar -> stub-classes.dex${NC}"
 
 if [ ! -f "$TEMP_DIR/classes.jar" ]; then
@@ -356,7 +382,7 @@ if [ -n "$ANDROID_JAR" ]; then
     rm -f "$API_JAR"
     jar cf "$API_JAR" -C "$API_STAGE" dev/mocika/shield/loader/MocikaPlayDelivery.class
     echo -e "${GREEN}✓ Play Delivery compileOnly API: $API_JAR${NC}"
-    "$D8_CMD" --output "$OUTPUT_DIR" "$TEMP_DIR/classes.jar" --min-api 19 --lib "$ANDROID_JAR"
+    "$D8_CMD" --output "$OUTPUT_DIR" "$TEMP_DIR/classes.jar" --min-api "$DEX_MIN_API" --lib "$ANDROID_JAR"
 else
     echo -e "${RED}错误: 未找到 android.jar，无法生成 Play Delivery compileOnly API${NC}"
     rm -rf "$TEMP_DIR"
@@ -442,7 +468,10 @@ cat > "$OUTPUT_DIR/metadata.json" << EOF
     "x86",
     "x86_64"
   ],
-  "min_android_api": 21,
+  "min_android_api": $RUNTIME_MIN_API,
+  "byos_remote_key": $BYOS_CAPABILITY,
+  "byos_auth": "$BYOS_AUTH",
+  "byos_fetch_protocol": 2,
   "target_android_api": 35,
   "native_library": "libmocikashield.so",
   "native_name_placeholder": "mocikanativeslot",
@@ -495,6 +524,14 @@ cd "$OLDPWD"
 
 # 创建符号链接指向最新版本
 ln -sf "mocika-runtime-resources-${BUILD_VERSION}.zip" "$OUTPUT_DIR/resources.zip"
+
+if [ "$BYOS_CAPABILITY" = "true" ]; then
+    # 专用包可与标准资源并存；不覆盖默认离线入口和 API 19 资源。
+    mkdir -p shield-stub/build/outputs/resources
+    cp "$OUTPUT_DIR/$RESOURCES_ZIP" "shield-stub/build/outputs/resources/$BYOS_RESOURCE"
+    echo "BYOS 资源：shield-stub/build/outputs/resources/$BYOS_RESOURCE"
+    exit 0
+fi
 
 # 候选资源复用同一份已混淆 Stub，只改变受核心严格校验的运行时能力声明。
 # 自动资源发现仍只返回 resources.zip；resources-memory.zip 仅供显式内部回归。

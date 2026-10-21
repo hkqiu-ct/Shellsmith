@@ -47,6 +47,28 @@ public final class ApkRecoveryCheck {
         return cipher.doFinal(data);
     }
 
+    // 识别并校验 v7 的公开结构；缺少包外 IKM 时不能验证 AEAD，更不能推断所有分析都失败。
+    private static JSONObject inspectByos(ByteBuffer b) throws Exception {
+        int count = b.getInt(), flags = b.getInt();
+        if (count < 1 || count > 256 || flags < 1 || flags > 3) throw new IllegalArgumentException("v7 数量/压缩标志无效");
+        String cert = new String(take(b, Byte.toUnsignedInt(b.get())), StandardCharsets.US_ASCII);
+        if (!cert.matches("[0-9A-F]{64}")) throw new IllegalArgumentException("v7 签名格式无效");
+        take(b, 16);
+        String token = new String(take(b, u16(b)), StandardCharsets.UTF_8);
+        if (!token.matches("[A-Za-z0-9_-]{1,256}")) throw new IllegalArgumentException("v7 令牌无效");
+        String url = new String(take(b, u16(b)), StandardCharsets.UTF_8);
+        java.net.URI uri = new java.net.URI(url);
+        if (url.length() > 2048 || !"https".equals(uri.getScheme()) || uri.getHost() == null
+                || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null)
+            throw new IllegalArgumentException("v7 地址无效");
+        take(b, 12);
+        if (b.remaining() < 16) throw new IllegalArgumentException("v7 密文截断");
+        return new JSONObject().put("dexb_version", 7).put("status", "external_key_required")
+                .put("header_structure", "valid").put("aead_authentication", "not_verified_without_external_key")
+                .put("declared_entries", count).put("ciphertext_bytes", b.remaining())
+                .put("limitation", "已识别 v7 无 IKM 包裹字段；APK 公开头部不足以复现 v6 解密链。未评估服务端授权、动态提取或其他泄露，不据此认定不可还原。");
+    }
+
     /** 白盒成本检查：复用已公开的指令长度/寄存器布局，反解每包的置换表。 */
     private static byte[] canonicalCode(byte[] image) throws Exception {
         ByteBuffer b = buffer(image);
@@ -222,7 +244,17 @@ public final class ApkRecoveryCheck {
         if (payload < 0) throw new IllegalArgumentException("未找到 DEXB 载荷");
         ByteBuffer b = buffer(Arrays.copyOfRange(dex, payload, dex.length));
         b.position(4);
-        if (b.getInt() != 6) throw new IllegalArgumentException("仅检查 DEXB v6");
+        int version = b.getInt();
+        if (version == 7) {
+            JSONObject result = inspectByos(b).put("apk_sha256", hash(Files.readAllBytes(apk)))
+                    .put("elapsed_ms", (System.nanoTime() - begin) / 1000000);
+            if (args.length == 4 && !result.getString("apk_sha256").equals(new JSONObject(Files.readString(Path.of(args[3]))).getString("output_sha256")))
+                throw new IllegalStateException("报告与 APK 不匹配");
+            Files.writeString(root.resolve("recovery.json"), result.toString(2) + "\n");
+            System.out.println("v7 结构检查完成：需要外部密钥；未执行 AEAD 认证或动态提取评估。");
+            return;
+        }
+        if (version != 6) throw new IllegalArgumentException("恢复检查不支持此 DEXB 版本，不能视为防护通过");
         int count = b.getInt(), layers = b.getInt();
         if (count < 1 || count > 10000 || layers < 1 || layers > 3) throw new IllegalArgumentException("头部数量无效");
         byte[] cert = take(b, Byte.toUnsignedInt(b.get())), build = take(b, 16), wrapNonce = take(b, 12);
@@ -284,11 +316,12 @@ public final class ApkRecoveryCheck {
         if (args.length == 4) {
             JSONObject report = new JSONObject(Files.readString(Path.of(args[3])));
             if (!hash(Files.readAllBytes(apk)).equals(report.getString("output_sha256"))) throw new IllegalStateException("报告与 APK 不匹配");
-            JSONObject selection = report.getJSONObject("build").getJSONObject("selection");
+            JSONObject selection = report.getJSONObject("build").optJSONObject("selection");
             Map<String, Map<String, com.android.tools.smali.dexlib2.iface.Method>> dexMethods = new HashMap<>();
             for (Object entry : report.getJSONArray("methods")) {
                 JSONObject row = (JSONObject) entry;
                 if (!row.getBoolean("artifact_verified")) continue;
+                if (selection == null) throw new IllegalStateException("已验证方法缺少跳板选择配置");
                 String name = row.getString("input_dex");
                 if (!name.matches("classes[0-9]*\\.dex") || !hashes.has(name)) throw new IllegalArgumentException("报告引用了未恢复的 DEX");
                 if (!dexMethods.containsKey(name)) {

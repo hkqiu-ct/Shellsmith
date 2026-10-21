@@ -206,6 +206,8 @@ pub(crate) struct RuntimeSelection {
     pub(crate) stub_application: String,
     pub(crate) stub_component_factory: Option<String>,
     pub(crate) memory_dex: bool,
+    pub(crate) byos_remote_key: bool,
+    pub(crate) byos_auth: Option<crate::ByosAuth>,
     pub(crate) xop_pvm2: bool,
     /// 壳运行时支持的最高 PVM2 镜像格式版本；旧资源包为 None。
     pub(crate) xop_pvm2_format: Option<u32>,
@@ -238,6 +240,8 @@ pub(crate) fn read_runtime_selection(
         stub_application: metadata.stub_application,
         stub_component_factory: metadata.stub_component_factory,
         memory_dex: metadata.memory_dex,
+        byos_remote_key: metadata.byos_remote_key,
+        byos_auth: metadata.byos_auth,
         xop_pvm2: metadata.xop_pvm2,
         xop_pvm2_format: metadata.xop_pvm2_format,
         xop_vm_bridge: metadata.xop_vm_bridge,

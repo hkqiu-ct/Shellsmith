@@ -48,3 +48,9 @@ pub use signing::{
     SigningProgressStep, SigningVersions,
 };
 pub use zipalign::{align_apk, verify_apk_alignment, AlignmentIssue};
+#[cfg(test)]
+mod byos_tests;
+mod remote_key;
+
+pub use remote_key::validate_options as validate_byos_options;
+pub use remote_key::{check_connection as check_byos_connection, ByosAuth, ByosConnectionCheck};

@@ -8,13 +8,7 @@
 # 但保留的是已匿名的 Ld，避免 BinLoader 字符串出现在产物中。
 # native 方法通过 RegisterNatives 绑定，R8 无法静态追踪，必须显式声明防止被裁剪。
 # getSignatureSha256 由 Rust 侧通过混淆后的方法名反射调用，同样需防裁剪。
--keepclasseswithmembernames,allowobfuscation class dev.mocika.shield.loader.Ld {
-    native <methods>;
-}
--keepclassmembers,allowobfuscation class dev.mocika.shield.loader.Ld {
-    native <methods>;
-    static java.lang.String getSignatureSha256(android.content.Context);
-}
+-keep,allowobfuscation class dev.mocika.shield.loader.Ld { *; }
 
 # Xop transform-only trampolines obtain both owner and method from metadata. This is
 # intentionally a plain Java bridge: the JNI entry lives in Ld, so R8 can rename both
@@ -73,5 +67,13 @@
 -keep class dev.mocika.shield.loader.MocikaUi { public *; }
 
 -keepclassmembernames class dev.mocika.shield.loader.Ld {
+    # JNI_OnLoad 按固定名称注册；独立 R8（BYOS）没有 AGP 的默认 native 保留规则。
+    static native java.nio.ByteBuffer[] s(android.content.Context, byte[]);
+    static native boolean t(android.content.Context, byte[]);
     static native void y(int);
+}
+
+# BYOS 回调由 JNI 按稳定方法名调用；类名沿用现有构建映射。
+-keepclassmembers class dev.mocika.shield.loader.Ld {
+    static byte[] fetchRemoteIkm(android.content.Context, java.lang.String, java.lang.String, java.lang.String);
 }

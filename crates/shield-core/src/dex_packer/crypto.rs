@@ -58,6 +58,18 @@ pub fn encrypt(plaintext: &[u8], key: &[u8; 32], nonce: &[u8; 12]) -> Vec<u8> {
         .expect("ChaCha20-Poly1305 加密不会因内存外原因失败")
 }
 
+pub fn encrypt_with_aad(plaintext: &[u8], key: &[u8; 32], nonce: &[u8; 12], aad: &[u8]) -> Vec<u8> {
+    ChaCha20Poly1305::new(key.into())
+        .encrypt(
+            Nonce::from_slice(nonce),
+            chacha20poly1305::aead::Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .expect("ChaCha20-Poly1305 加密失败")
+}
+
 #[cfg(test)]
 pub fn decrypt(ciphertext: &[u8], key: &[u8; 32], nonce: &[u8; 12]) -> Result<Vec<u8>, String> {
     let cipher = ChaCha20Poly1305::new(key.into());

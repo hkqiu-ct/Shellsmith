@@ -56,8 +56,12 @@ impl EnvironmentPolicy {
 }
 use crate::zipalign::{align_apk_with_native_packaging, NativeLibraryPackaging};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProtectOptions {
+    /// BYOS 构建端配置；认证凭据不得写入报告或 APK。
+    pub byos_endpoint: Option<String>,
+    pub byos_api_key: Option<String>,
+    pub byos_auth: Option<crate::ByosAuth>,
     pub runtime_ui: crate::RuntimeUiProtection,
     pub ui_packer_path: Option<PathBuf>,
     /// 用户对本次任务明确确认排除的、不受支持的 Native ABI。
@@ -149,6 +153,12 @@ pub fn protect_apk(
     on_progress: impl Fn(ProgressEvent) + Send + 'static,
     cancel: Arc<AtomicBool>,
 ) -> std::result::Result<(), ShieldError> {
+    crate::remote_key::validate_options(
+        opts.byos_endpoint.as_deref(),
+        opts.byos_api_key.as_deref(),
+        opts.byos_auth,
+    )
+    .map_err(ShieldError::from)?;
     let parent = opts
         .output
         .parent()
@@ -232,7 +242,18 @@ fn protect_apk_inner(
                 p.display()
             )))
         }
-        None => find_runtime_resources().map_err(missing_tool)?,
+        None => {
+            let standard = find_runtime_resources().map_err(missing_tool)?;
+            if let Some(auth) = opts.byos_auth {
+                let byos = standard.with_file_name(auth.resources());
+                if !byos.is_file() {
+                    return Err(ShieldError::from(anyhow::anyhow!("缺少所选 BYOS 资源，请运行 make build-byos（设备授权）或 make build-byos-play（Play），或通过 --resources 指定匹配资源")));
+                }
+                byos
+            } else {
+                standard
+            }
+        }
     };
     let apksigner = match &opts.apksigner_path {
         Some(p) if p.exists() => p.clone(),
@@ -250,6 +271,16 @@ fn protect_apk_inner(
         custom_runtime_resources,
     )
     .map_err(ShieldError::from)?;
+    if opts.byos_auth != runtime_selection.byos_auth {
+        return Err(ShieldError::from(anyhow::anyhow!(
+            "所选授权方式与 Runtime 不匹配，请重新构建对应 BYOS 资源"
+        )));
+    }
+    if opts.byos_endpoint.is_none() && runtime_selection.byos_remote_key {
+        return Err(ShieldError::from(anyhow::anyhow!(
+            "离线模式请使用标准 resources.zip，BYOS 资源只用于显式配置包外密钥的构建"
+        )));
+    }
     if opts.runtime_ui.runtime_enabled() && !runtime_selection.runtime_ui {
         return Err(ShieldError::from(anyhow::anyhow!(
             "所选 Runtime 不支持运行时界面保护，请重新构建 resources.zip"
@@ -323,7 +354,11 @@ fn protect_apk_inner(
         println!(
             "融合契约: v{} DEXB v{} 状态={}（单壳约束={})",
             fusion_plan.contract_version,
-            fusion_plan.dex_protocol_version,
+            if opts.byos_endpoint.is_some() {
+                7
+            } else {
+                fusion_plan.dex_protocol_version
+            },
             fusion_plan.status(),
             fusion_plan.single_shell_required
         );
@@ -469,10 +504,14 @@ fn protect_apk_inner(
 
     let package =
         crate::protect::manifest::read_package_name(&apk_dir).map_err(ShieldError::from)?;
+    if let Some(auth) = opts.byos_auth {
+        crate::protect::manifest::configure_byos(&apk_dir, auth).map_err(ShieldError::from)?;
+    }
     let (ikm, project_identity, project_build_salt) = crate::project_protection::build_material(
         &crate::project_protection::default_directory().map_err(ShieldError::from)?,
         &package,
         &signature,
+        opts.byos_endpoint.is_some(),
     )
     .map_err(ShieldError::from)?;
     emit_progress(
@@ -480,9 +519,14 @@ fn protect_apk_inner(
         &cancel,
         ProgressStep::ProcessDex,
         &format!(
-            "自动使用项目保护身份：{}（{}）；本机保存，手机安装即用",
+            "自动使用项目保护身份：{}（{}）；{}",
             package,
-            &project_identity.id[..12]
+            &project_identity.id[..12],
+            if opts.byos_endpoint.is_some() {
+                "BYOS 模式，启动需要联网鉴权"
+            } else {
+                "本机保存，手机安装即用"
+            }
         ),
     )?;
     let mut method_report = None;
@@ -710,12 +754,26 @@ fn protect_apk_inner(
     print_step("处理DEX文件");
     let compression_layers = opts.ai_resistance.compression_layers();
     print_success(&format!(
-        "DEXB v6 AI 抵抗 {}：使用 {} 层压缩",
+        "DEXB v{} AI 抵抗 {}：使用 {} 层压缩",
+        if opts.byos_endpoint.is_some() { 7 } else { 6 },
         opts.ai_resistance.as_str(),
         compression_layers
     ));
-    let cache_identity =
-        process_dex(&apk_dir, &signature, &ikm, compression_layers).map_err(ShieldError::from)?;
+    let byos_token = match (&opts.byos_endpoint, &opts.byos_api_key, opts.byos_auth) {
+        (Some(endpoint), Some(api_key), Some(auth)) => Some(
+            crate::remote_key::register_ikm(endpoint, &ikm, api_key, auth)
+                .map_err(ShieldError::from)?,
+        ),
+        _ => None,
+    };
+    let cache_identity = process_dex(
+        &apk_dir,
+        &signature,
+        &ikm,
+        compression_layers,
+        byos_token.as_deref().zip(opts.byos_endpoint.as_deref()),
+    )
+    .map_err(ShieldError::from)?;
     add_cache_identity(&apk_dir, &cache_identity).map_err(ShieldError::from)?;
     if runtime_selection.memory_dex {
         add_memory_payload_metrics(&apk_dir, &cache_identity).map_err(ShieldError::from)?;
@@ -776,12 +834,28 @@ fn protect_apk_inner(
             .map_err(anyhow::Error::from)
             .map_err(ShieldError::from)?,
     );
-    identity_report
-        .build
-        .insert("project_build_salt".into(), project_build_salt.into());
+    if let Some(salt) = project_build_salt {
+        identity_report
+            .build
+            .insert("project_build_salt".into(), salt.into());
+    }
+    identity_report.build.insert(
+        "key_material_source".into(),
+        if opts.byos_endpoint.is_some() {
+            "independent_random_per_build"
+        } else {
+            "local_project_seed_hkdf"
+        }
+        .into(),
+    );
     identity_report.build.insert(
         "key_delivery".into(),
-        "install_and_run_public_recovery_path".into(),
+        if let Some(auth) = opts.byos_auth {
+            auth.as_str()
+        } else {
+            "install_and_run_public_recovery_path"
+        }
+        .into(),
     );
     if let Some(report) = method_report.as_mut() {
         for entry in walkdir::WalkDir::new(&apk_dir) {

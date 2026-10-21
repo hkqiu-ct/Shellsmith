@@ -221,6 +221,8 @@ jobs:
           required = [
               source / "resources.zip",
               source / "resources-api19.zip",
+              source / "resources-byos.zip",
+              source / "resources-byos-play.zip",
               source / "mocika-play-delivery-api.jar",
               root / "tools" / "xop-pvm2-packer.jar",
               root / "tools" / "licenses" / "XopProtector-LICENSE.txt",

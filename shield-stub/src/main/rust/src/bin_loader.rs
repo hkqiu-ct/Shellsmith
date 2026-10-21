@@ -104,6 +104,7 @@ pub struct ParsedPayload<'a> {
     pub nonce: [u8; DEXB_NONCE_LEN],
     pub ciphertext: &'a [u8],
     pub compression_layers: u8,
+    pub aad: &'a [u8],
 }
 
 pub struct DecodedPayload {
@@ -114,7 +115,18 @@ pub struct DecodedPayload {
     pub native_so_key: [u8; 16],
 }
 
+#[cfg(test)]
 pub fn parse_header<'a>(bin_data: &'a [u8], cert_fingerprint: &[u8]) -> Result<ParsedPayload<'a>> {
+    parse_header_with_fetch(bin_data, cert_fingerprint, |_, _, _| {
+        Err("BYOS_IKM_REQUIRED".into())
+    })
+}
+
+pub fn parse_header_with_fetch<'a>(
+    bin_data: &'a [u8],
+    cert_fingerprint: &[u8],
+    fetch: impl FnOnce(&str, &str, &str) -> Result<Vec<u8>>,
+) -> Result<ParsedPayload<'a>> {
     if bin_data.len() < 12 {
         return Err(format!(
             "数据过短: {} 字节，至少需要 12 字节基础头部",
@@ -188,6 +200,7 @@ pub fn parse_header<'a>(bin_data: &'a [u8], cert_fingerprint: &[u8]) -> Result<P
                 nonce,
                 ciphertext: &bin_data[nonce_end..],
                 compression_layers: 1,
+                aad: &[],
             })
         }
         6 => {
@@ -267,9 +280,69 @@ pub fn parse_header<'a>(bin_data: &'a [u8], cert_fingerprint: &[u8]) -> Result<P
                 nonce: payload_nonce,
                 ciphertext: &bin_data[nonce_end..],
                 compression_layers,
+                aad: &[],
             })
         }
-        _ => Err(format!("不支持的版本: {}，当前支持 v5/v6", version)),
+        7 => {
+            let mut position = 12usize;
+            let mut take = |size: usize| -> Result<&'a [u8]> {
+                let end = position.checked_add(size).ok_or("v7 头部溢出")?;
+                let value = bin_data.get(position..end).ok_or("v7 头部截断")?;
+                position = end;
+                Ok(value)
+            };
+            let flags = u32::from_le_bytes(take(4)?.try_into().unwrap());
+            if !(1..=3).contains(&flags) || dex_count == 0 {
+                return Err("v7 计数或压缩标志无效".into());
+            }
+            let sig_len = take(1)?[0] as usize;
+            let signature = std::str::from_utf8(take(sig_len)?).map_err(|_| "v7 签名格式无效")?;
+            if signature.len() != 64
+                || !signature.bytes().all(|b| b.is_ascii_hexdigit())
+                || signature.as_bytes() != cert_fingerprint
+            {
+                return Err("v7 运行签名不匹配".into());
+            }
+            take(16)?; // build_id 作为认证头部的一部分保留。
+            let token_len = u16::from_le_bytes(take(2)?.try_into().unwrap()) as usize;
+            let token = std::str::from_utf8(take(token_len)?).map_err(|_| "v7 令牌格式无效")?;
+            if token.is_empty()
+                || token.len() > 256
+                || !token
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            {
+                return Err("v7 令牌格式无效".into());
+            }
+            let url_len = u16::from_le_bytes(take(2)?.try_into().unwrap()) as usize;
+            let url = std::str::from_utf8(take(url_len)?).map_err(|_| "v7 地址格式无效")?;
+            if !url.starts_with("https://")
+                || url.len() > 2048
+                || url.bytes().any(|b| {
+                    b.is_ascii_control() || b.is_ascii_whitespace() || b"@?#\\".contains(&b)
+                })
+            {
+                return Err("v7 地址格式无效".into());
+            }
+            let nonce = take(12)?.try_into().unwrap();
+            let ciphertext = bin_data.get(position..).ok_or("v7 密文截断")?;
+            if ciphertext.len() < 16 {
+                return Err("v7 密文截断".into());
+            }
+            let ikm = fetch(url, token, signature)?;
+            if ikm.len() != 32 {
+                return Err("v7 IKM 长度无效".into());
+            }
+            Ok(ParsedPayload {
+                expected_signature: signature.into(),
+                ikm,
+                nonce,
+                ciphertext,
+                compression_layers: flags as u8,
+                aad: &bin_data[..position],
+            })
+        }
+        _ => Err(format!("不支持的版本: {}，当前支持 v5/v6/v7", version)),
     }
 }
 
@@ -282,9 +355,20 @@ pub fn parse_and_decompress_all(
     Ok((decoded.expected_signature, decoded.dex_files))
 }
 
+#[cfg(test)]
 pub fn parse_and_decompress_payload(
     bin_data: &[u8],
     cert_fingerprint: &[u8],
+) -> Result<DecodedPayload> {
+    parse_and_decompress_payload_with_fetch(bin_data, cert_fingerprint, |_, _, _| {
+        Err("BYOS_IKM_REQUIRED".into())
+    })
+}
+
+pub fn parse_and_decompress_payload_with_fetch(
+    bin_data: &[u8],
+    cert_fingerprint: &[u8],
+    fetch: impl FnOnce(&str, &str, &str) -> Result<Vec<u8>>,
 ) -> Result<DecodedPayload> {
     if bin_data.len() < 12 {
         return Err(format!(
@@ -316,12 +400,13 @@ pub fn parse_and_decompress_payload(
 
     match version {
         4 => Err("格式版本不支持，请重新加固".to_string()),
-        5 | 6 => {
-            let payload = parse_header(bin_data, cert_fingerprint)?;
-            let plaintext = crypto::decrypt(
+        5..=7 => {
+            let payload = parse_header_with_fetch(bin_data, cert_fingerprint, fetch)?;
+            let plaintext = crypto::decrypt_with_aad(
                 payload.ciphertext,
                 &crypto::derive_key(&payload.ikm, &payload.nonce, cert_fingerprint),
                 &payload.nonce,
+                payload.aad,
             )?;
             let (dex_files, xop_code) =
                 parse_entries(&plaintext, dex_count, payload.compression_layers, true)?;
@@ -339,7 +424,7 @@ pub fn parse_and_decompress_payload(
                 native_so_key: crypto::derive_native_so_key(&payload.ikm, cert_fingerprint),
             })
         }
-        _ => Err(format!("不支持的版本: {}，当前支持 v5/v6", version)),
+        _ => Err(format!("不支持的版本: {}，当前支持 v5/v6/v7", version)),
     }
 }
 
@@ -347,7 +432,18 @@ pub fn parse_and_decompress_payload(
 /// container, but only decompress the tiny PVM2 sidecar instead of every cached DEX.
 type RuntimeSidecars = (String, Option<(Vec<u8>, [u8; 16])>, [u8; 16], [u8; 16]);
 
+#[cfg(test)]
 pub fn parse_xop_pvm2_payload(bin_data: &[u8], cert_fingerprint: &[u8]) -> Result<RuntimeSidecars> {
+    parse_xop_pvm2_payload_with_fetch(bin_data, cert_fingerprint, |_, _, _| {
+        Err("BYOS_IKM_REQUIRED".into())
+    })
+}
+
+pub fn parse_xop_pvm2_payload_with_fetch(
+    bin_data: &[u8],
+    cert_fingerprint: &[u8],
+    fetch: impl FnOnce(&str, &str, &str) -> Result<Vec<u8>>,
+) -> Result<RuntimeSidecars> {
     if bin_data.len() < 12 || &bin_data[0..4] != b"DEXB" {
         return Err("invalid DEXB payload".to_string());
     }
@@ -359,11 +455,12 @@ pub fn parse_xop_pvm2_payload(bin_data: &[u8], cert_fingerprint: &[u8]) -> Resul
     if dex_count > MAX_DEX_COUNT {
         return Err(format!("dex_count {dex_count} 超过上限 {MAX_DEX_COUNT}"));
     }
-    let payload = parse_header(bin_data, cert_fingerprint)?;
-    let plaintext = crypto::decrypt(
+    let payload = parse_header_with_fetch(bin_data, cert_fingerprint, fetch)?;
+    let plaintext = crypto::decrypt_with_aad(
         payload.ciphertext,
         &crypto::derive_key(&payload.ikm, &payload.nonce, cert_fingerprint),
         &payload.nonce,
+        payload.aad,
     )?;
     let (_, xop_code) = parse_entries(&plaintext, dex_count, payload.compression_layers, false)?;
     let assets_key = crypto::derive_assets_pas2_key(&payload.ikm, cert_fingerprint);
