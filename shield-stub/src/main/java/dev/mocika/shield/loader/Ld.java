@@ -74,11 +74,16 @@ public class Ld {
     /** 进程级策略：0 阻断、1 兼容、2 严格；阻断后不能重置。 */
     static native void y(int policy);
 
+    static byte[] fetchRemoteIkm(Context ctx, String serverUrl, String tokenId, String certificate) {
+        return ByosKeyClient.fetch(ctx, serverUrl, tokenId, certificate);
+    }
+
     static void initializeEmbeddedRuntime(Context ctx) throws Exception {
         ApplicationInfo info = ctx.getPackageManager().getApplicationInfo(
                 ctx.getPackageName(), PackageManager.GET_META_DATA);
         if (info.metaData == null
-                || !info.metaData.getBoolean("dev.mocika.shield.XOP_PVM2", false)) return;
+                || (!info.metaData.getBoolean("dev.mocika.shield.XOP_PVM2", false)
+                && !info.metaData.getBoolean("dev.mocika.shield.BYOS", false))) return;
         MemoryRuntimeProfiler profiler = MemoryRuntimeProfiler.start();
         byte[] dexBytes = readClassesDexFromApk(ctx);
         if (profiler != null) profiler.stage("cache_apk_read", 0, dexBytes.length);

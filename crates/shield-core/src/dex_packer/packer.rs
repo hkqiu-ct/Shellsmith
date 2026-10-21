@@ -94,9 +94,7 @@ impl DexPacker {
         let envelope_key = crypto::derive_envelope_key(sig_bytes, &build_id);
         let wrapped_ikm = crypto::encrypt(ikm, &envelope_key, &wrap_nonce);
 
-        let (encoded, plaintext, ciphertext) =
-            self.build_payload(ikm, &nonce, sig_bytes, &derived_key)?;
-        let _ = (encoded, plaintext);
+        let ciphertext = crypto::encrypt(&self.build_payload()?, &derived_key, &nonce);
 
         let dex_count = self.dex_files.len() as u32;
         // DEXB v6 头部：magic + version + dex_count + flags
@@ -144,9 +142,13 @@ impl DexPacker {
         token_id: &str,
         server_url: &str,
     ) -> Result<()> {
-        if ikm.is_empty() {
-            anyhow::bail!("IKM 不能为空");
-        }
+        anyhow::ensure!(ikm.len() == 32, "BYOS IKM 必须为 32 字节");
+        crate::remote_key::validate_endpoint(server_url)?;
+        crate::remote_key::validate_token(token_id)?;
+        anyhow::ensure!(
+            signature.len() == 64 && signature.bytes().all(|b| b.is_ascii_hexdigit()),
+            "BYOS 运行证书指纹无效"
+        );
         if self.dex_files.is_empty() {
             anyhow::bail!("没有 DEX 文件可打包");
         }
@@ -169,7 +171,7 @@ impl DexPacker {
         rand::rng().fill_bytes(&mut nonce);
         let derived_key = crypto::derive_key(ikm, &nonce, sig_bytes);
 
-        let (_, _, ciphertext) = self.build_payload(ikm, &nonce, sig_bytes, &derived_key)?;
+        let plaintext = self.build_payload()?;
 
         let dex_count = self.dex_files.len() as u32;
         // v7 头部：magic + version + dex_count + flags + sig_len + signature
@@ -187,7 +189,8 @@ impl DexPacker {
                 + 2
                 + url_bytes.len()
                 + 12
-                + ciphertext.len(),
+                + plaintext.len()
+                + 16,
         );
         out.extend_from_slice(b"DEXB");
         out.extend_from_slice(&DEXB_VERSION_BYOS.to_le_bytes());
@@ -201,6 +204,8 @@ impl DexPacker {
         out.extend_from_slice(&(url_bytes.len() as u16).to_le_bytes());
         out.extend_from_slice(url_bytes);
         out.extend_from_slice(&nonce);
+        // v7 将头部纳入 AEAD 认证，拒绝替换端点、令牌及格式字段。
+        let ciphertext = crypto::encrypt_with_aad(&plaintext, &derived_key, &nonce, &out);
         out.extend_from_slice(&ciphertext);
 
         let mut file = fs::File::create(output_path)
@@ -209,13 +214,7 @@ impl DexPacker {
         Ok(())
     }
 
-    fn build_payload(
-        &self,
-        ikm: &[u8],
-        nonce: &[u8; 12],
-        sig_bytes: &[u8],
-        derived_key: &[u8; 32],
-    ) -> Result<(Vec<Vec<u8>>, Vec<u8>, Vec<u8>)> {
+    fn build_payload(&self) -> Result<Vec<u8>> {
         let mut encoded = Vec::with_capacity(self.dex_files.len());
         for meta in &self.dex_files {
             let mut data = meta.data.clone();
@@ -243,9 +242,7 @@ impl DexPacker {
             plaintext.extend_from_slice(data);
         }
 
-        let _ = (ikm, nonce, sig_bytes);
-        let ciphertext = crypto::encrypt(&plaintext, derived_key, nonce);
-        Ok((encoded, plaintext, ciphertext))
+        Ok(plaintext)
     }
 }
 

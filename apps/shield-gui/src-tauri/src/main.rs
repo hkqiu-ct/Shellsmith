@@ -7,6 +7,7 @@ mod app_paths;
 mod application_identity;
 mod application_sharing;
 mod build_info;
+mod byos;
 mod cert_service;
 mod cert_store;
 mod error_report;
@@ -61,6 +62,7 @@ use updates::{check_update_impl, UpdateCheckResult};
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProtectRequest {
+    byos_profile_id: Option<String>,
     #[serde(default)]
     runtime_ui: shield_core::RuntimeUiProtection,
     sharing: Option<application_sharing::SharingChoice>,
@@ -178,6 +180,17 @@ async fn protect_apk(
     cancel_handle: tauri::State<'_, CancelHandle>,
     task_manager: tauri::State<'_, TaskManager>,
 ) -> Result<(), String> {
+    let byos = request
+        .byos_profile_id
+        .as_deref()
+        .map(|id| byos::load(&certificate_state, id))
+        .transpose()?;
+    if byos.is_some() && matches!(request.runtime_mode, RuntimeMode::AndroidApi19) {
+        return Err(
+            "BYOS 不能用于 Android 4.4 模式；设备授权要求 Android 8.0+，Play 授权要求 Android 10+"
+                .into(),
+        );
+    }
     let auto_sign = request.certificate_id.is_some() && request.signed_output.is_some();
     let signing_certificate = match request.certificate_id {
         Some(id) => Some(
@@ -210,6 +223,7 @@ async fn protect_apk(
     let result = execute_protect_apk(
         window.clone(),
         ProtectExecution {
+            byos,
             excluded_abis: request.excluded_abis,
             task_id: request.task_id.clone(),
             input: request.input,
@@ -568,6 +582,10 @@ fn main() {
             check_aab,
             protect_aab,
             protect_apk,
+            byos::list_byos_profiles,
+            byos::save_byos_profile,
+            byos::test_byos_connection,
+            byos::delete_byos_profile,
             cancel_protect,
             ios_runner::check_ios_project,
             ios_runner::protect_ios_project,

@@ -15,9 +15,11 @@ import { notifyError, notifySuccess } from "@/lib/notify";
 import {
   api,
   defaultRuntimeUi,
+  byosRequirements,
   onTauriEvent,
   openFileDialog,
   type ApkCheckResult,
+  type ByosProfile,
   type BuildInfo,
   type CertificateRecord,
   type DragDropPayload,
@@ -44,6 +46,7 @@ export function useProtectWorkflow({
   buildInfo: BuildInfo | null;
   defaults: ProtectDefaults;
 }) {
+  const [byosProfile, setByosProfile] = useState<ByosProfile | null>(null);
   const [input, setInput] = useState("");
   const sharing = useApplicationSharing(input);
   const [outputFilename, setOutputFilenameState] = useState("");
@@ -265,6 +268,11 @@ export function useProtectWorkflow({
     if (taskLocked.current || !preflight || !input || !output || precheck || preflight.verdict === "blocked" || outputFilenameError || (outputDirectoryMode === "fixed" && !fixedOutputDirectory)) {
       return;
     }
+    if (byosProfile && (runtimeMode !== "standard" || (preflight.facts.min_sdk ?? 0) < byosRequirements[byosProfile.authMode].minSdk)) {
+      const required = byosRequirements[byosProfile.authMode];
+      notifyError(locale === "en" ? `Selected BYOS mode requires ${required.platform} (minSdkVersion ${required.minSdk}) and the standard runtime.` : `所选 BYOS 授权方式要求 ${required.platform}（minSdkVersion ${required.minSdk}），并使用标准运行时。`);
+      return;
+    }
     taskLocked.current = true;
     setState("confirming");
     let started = false;
@@ -327,6 +335,7 @@ export function useProtectWorkflow({
         runtimeUi,
         runtimeMode === "standard" ? pvm2RequiredMethods.trim() || null : null,
         nativeVmpEvidence.trim() || null,
+        byosProfile?.id ?? null,
       );
       setFinishedAt(Date.now());
       setState("done");
@@ -343,7 +352,7 @@ export function useProtectWorkflow({
         setState("idle");
       }
     }
-  }, [aiResistance, autoSignReady, buildInfo, certificate, environmentPolicy, fixedOutputDirectory, input, locale, output, outputDirectory, outputDirectoryMode, outputFilenameError, precheck, preflight, protectionProfile, runtimeMode, runtimeUi, sharing, xopPvm2PackerPath, xopTrueVmpPrefixes, pvm2RequiredMethods, nativeVmpEvidence]);
+  }, [byosProfile, aiResistance, autoSignReady, buildInfo, certificate, environmentPolicy, fixedOutputDirectory, input, locale, output, outputDirectory, outputDirectoryMode, outputFilenameError, precheck, preflight, protectionProfile, runtimeMode, runtimeUi, sharing, xopPvm2PackerPath, xopTrueVmpPrefixes, pvm2RequiredMethods, nativeVmpEvidence]);
 
   const cancel = useCallback(async () => {
     await api.cancelProtect().catch(() => undefined);
@@ -355,6 +364,7 @@ export function useProtectWorkflow({
     : ["CheckTools", "Unpack", "ModifyManifest", "ProcessDex", "InjectRuntime", "Repack", "AlignApk"];
 
   return {
+    byosProfile, setByosProfile,
     sharing,
     excludedAbis,
     input,

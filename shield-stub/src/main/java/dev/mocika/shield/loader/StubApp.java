@@ -85,10 +85,11 @@ public class StubApp extends Application {
             ClassLoader loader;
             if (android.os.Build.VERSION.SDK_INT >= 28
                     && base.getClassLoader() instanceof DeferredPayloadClassLoader) {
-                loader = MemoryRuntimeBridge.initialize(base, getOriginalComponentFactory(base));
+                loader = MemoryRuntimeBridge.initialize(this, getOriginalComponentFactory(base));
                 componentFactoryActive = true;
             } else {
-                List<File> dexFiles = Ld.extractDexFiles(base);
+                // BYOS 的旧系统 Keystore 启动适配需要已 attach 的壳 Application。
+                List<File> dexFiles = Ld.extractDexFiles(this);
                 MocikaAssets.activateNativeOverlay(base);
                 MocikaNativeLibraries.install(base, base.getClassLoader());
                 DexInjector.inject(base, dexFiles);

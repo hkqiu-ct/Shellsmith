@@ -159,6 +159,65 @@ pub(crate) fn add_xop_pvm2_marker(apk_dir: &Path) -> Result<()> {
     fs::write(manifest_path, result).context("写入 PVM2 能力到 AndroidManifest.xml 失败")
 }
 
+pub(crate) fn configure_byos(apk_dir: &Path, auth: crate::ByosAuth) -> Result<()> {
+    // apktool 将 uses-sdk 移入此配置；不自动提高宿主应用声明的系统下限。
+    let config = fs::read_to_string(apk_dir.join("apktool.yml"))?;
+    let min_api = config.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("minSdkVersion:")
+            .and_then(|v| v.trim().trim_matches(['\'', '"']).parse::<u32>().ok())
+    });
+    anyhow::ensure!(
+        min_api.is_some_and(|api| api >= auth.min_android_api()),
+        "BYOS {} 要求输入 APK 的 minSdkVersion 至少为 {}，请先调整应用构建配置",
+        auth.as_str(),
+        auth.min_android_api()
+    );
+    let path = apk_dir.join("AndroidManifest.xml");
+    let mut content = fs::read_to_string(&path)?;
+    anyhow::ensure!(
+        !content.contains("dev.mocika.shield.BYOS"),
+        "原 APK 已占用 BYOS 能力字段"
+    );
+    let close = content
+        .rfind("</application>")
+        .context("Manifest 缺少 application")?;
+    content.insert_str(
+        close,
+        "<meta-data android:name=\"dev.mocika.shield.BYOS\" android:value=\"true\" />\n",
+    );
+    if !content.contains("\"android.permission.INTERNET\"") {
+        let start = content
+            .find("<application")
+            .context("Manifest 缺少 application")?;
+        content.insert_str(
+            start,
+            "<uses-permission android:name=\"android.permission.INTERNET\" />\n",
+        );
+    }
+    // Android 11+ 的包可见性限制会影响 SDK 对 Play 商店的签名检查。
+    if auth == crate::ByosAuth::PlayIntegrity && !content.contains("\"com.android.vending\"") {
+        let query = "<package android:name=\"com.android.vending\" />";
+        if let Some(close) = content.rfind("</queries>") {
+            content.insert_str(close, query);
+        } else if let Some(start) = content.find("<queries") {
+            let end = find_tag_end(&content, start).context("Manifest queries 标签无效")?;
+            anyhow::ensure!(
+                content[start..end].trim_end().ends_with("/>"),
+                "Manifest queries 标签未闭合"
+            );
+            content.replace_range(start..end, &format!("<queries>{query}</queries>"));
+        } else {
+            let start = content
+                .find("<application")
+                .context("Manifest 缺少 application")?;
+            content.insert_str(start, &format!("<queries>{query}</queries>\n"));
+        }
+    }
+    fs::write(path, content)?;
+    Ok(())
+}
+
 pub(crate) fn add_memory_payload_metrics(apk_dir: &Path, identity: &CacheIdentity) -> Result<()> {
     let manifest_path = apk_dir.join("AndroidManifest.xml");
     let content = fs::read_to_string(&manifest_path).context("读取 AndroidManifest.xml 失败")?;
@@ -293,6 +352,71 @@ fn remove_xml_attr(tag: &str, attr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byos_requires_supported_sdk_and_adds_permission_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = "<manifest><application></application></manifest>";
+        for (auth, required_api) in [
+            (crate::ByosAuth::DeviceApproval, 26),
+            (crate::ByosAuth::PlayIntegrity, 29),
+        ] {
+            for version in [
+                "19", "23", "25", "26", "27", "28", "invalid", "29", "30", "35",
+            ] {
+                fs::write(
+                    dir.path().join("apktool.yml"),
+                    format!("sdkInfo:\n  minSdkVersion: '{version}'\n"),
+                )
+                .unwrap();
+                fs::write(dir.path().join("AndroidManifest.xml"), manifest).unwrap();
+                let accepted = version.parse::<u32>().is_ok_and(|api| api >= required_api);
+                assert_eq!(configure_byos(dir.path(), auth).is_ok(), accepted);
+                let result = fs::read_to_string(dir.path().join("AndroidManifest.xml")).unwrap();
+                if accepted {
+                    assert_eq!(result.matches("android.permission.INTERNET").count(), 1);
+                    assert!(result.contains("dev.mocika.shield.BYOS"));
+                    assert_eq!(
+                        result.contains("com.android.vending"),
+                        auth == crate::ByosAuth::PlayIntegrity
+                    );
+                    assert!(configure_byos(dir.path(), auth).is_err());
+                } else {
+                    assert_eq!(result, manifest);
+                }
+            }
+        }
+        fs::write(dir.path().join("AndroidManifest.xml"), "<manifest><uses-permission android:name=\"android.permission.INTERNET\"/><application></application></manifest>").unwrap();
+        configure_byos(dir.path(), crate::ByosAuth::PlayIntegrity).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("AndroidManifest.xml"))
+                .unwrap()
+                .matches("android.permission.INTERNET")
+                .count(),
+            1
+        );
+        fs::write(dir.path().join("AndroidManifest.xml"), manifest).unwrap();
+        configure_byos(dir.path(), crate::ByosAuth::DeviceApproval).unwrap();
+        assert!(!fs::read_to_string(dir.path().join("AndroidManifest.xml"))
+            .unwrap()
+            .contains("com.android.vending"));
+        for queries in [
+            "<queries/>",
+            "<queries><package android:name=\"other.app\"/></queries>",
+            "<queries><package android:name=\"com.android.vending\"/></queries>",
+        ] {
+            fs::write(
+                dir.path().join("AndroidManifest.xml"),
+                format!("<manifest>{queries}<application></application></manifest>"),
+            )
+            .unwrap();
+            configure_byos(dir.path(), crate::ByosAuth::PlayIntegrity).unwrap();
+            let result = fs::read_to_string(dir.path().join("AndroidManifest.xml")).unwrap();
+            assert_eq!(result.matches("<queries>").count(), 1);
+            assert_eq!(result.matches("com.android.vending").count(), 1);
+            assert_eq!(result.contains("other.app"), queries.contains("other.app"));
+        }
+    }
 
     #[test]
     fn find_tag_end_simple_tag() {

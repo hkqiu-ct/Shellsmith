@@ -154,12 +154,28 @@ function Build-Stub {
     Info "构建 shield-stub（resources.zip）..."
     Push-Location $Root
     try {
+        $previousByos = $env:MOCIKA_BYOS_RUNTIME
+        $previousPlay = $env:MOCIKA_BYOS_PLAY_INTEGRITY
+        try {
+            $env:MOCIKA_BYOS_RUNTIME = "1"
+            $env:MOCIKA_BYOS_PLAY_INTEGRITY = "0"
+            & "scripts\build-stub.ps1" -ShieldVersion $Version
+            if ($LASTEXITCODE -ne 0) { Err "设备授权资源构建失败" }
+            $env:MOCIKA_BYOS_PLAY_INTEGRITY = "1"
+            & "scripts\build-stub.ps1" -ShieldVersion $Version
+            if ($LASTEXITCODE -ne 0) { Err "Play 授权资源构建失败" }
+        } finally {
+            $env:MOCIKA_BYOS_RUNTIME = "0"
+            $env:MOCIKA_BYOS_PLAY_INTEGRITY = "0"
+        }
         & "scripts\build-stub.ps1" -ShieldVersion $Version
         if ($LASTEXITCODE -ne 0) { Err "shield-stub 构建失败" }
         $env:SKIP_STANDARD_STUB_BUILD = "1"
         & bash "scripts/build-android-api19-resources.sh"
         if ($LASTEXITCODE -ne 0) { Err "Android 4.4 兼容资源构建失败" }
     } finally {
+        $env:MOCIKA_BYOS_RUNTIME = $previousByos
+        $env:MOCIKA_BYOS_PLAY_INTEGRITY = $previousPlay
         Pop-Location
     }
     $zip = Join-Path $Root "shield-stub\build\outputs\resources\resources.zip"
@@ -238,6 +254,9 @@ function Package-Cli {
     Copy-Item (Join-Path $Root "tools\licenses\XopProtector-LICENSE.txt") "$pkgDir\licenses\"
     Copy-Item (Join-Path $Root "tools\licenses\XopProtector-NOTICE.txt") "$pkgDir\licenses\"
 
+    foreach ($byosResource in @("resources-byos.zip", "resources-byos-play.zip")) {
+        Copy-Item (Join-Path $Root "shield-stub\build\outputs\resources\$byosResource") "$pkgDir\resources\$byosResource"
+    }
     Copy-Item (Join-Path $Root "shield-stub\build\outputs\resources\resources.zip") `
         "$pkgDir\resources\resources.zip"
     Copy-Item (Join-Path $Root "shield-stub\build\outputs\resources\resources-api19.zip") `

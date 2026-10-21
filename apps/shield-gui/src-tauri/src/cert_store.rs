@@ -117,6 +117,10 @@ impl CertificateStoreState {
         &self.keystore_dir
     }
 
+    pub(crate) fn byos_key_path(&self) -> PathBuf {
+        self.db_path.with_file_name("byos-storage.key")
+    }
+
     pub(crate) fn open(&self) -> Result<Connection, String> {
         open_connection(&self.db_path)
     }

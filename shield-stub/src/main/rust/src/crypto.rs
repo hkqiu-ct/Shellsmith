@@ -48,10 +48,25 @@ pub fn derive_native_so_key(ikm: &[u8], cert_fingerprint: &[u8]) -> [u8; 16] {
 }
 
 pub fn decrypt(ciphertext: &[u8], key: &[u8; 32], nonce: &[u8; 12]) -> Result<Vec<u8>, String> {
+    decrypt_with_aad(ciphertext, key, nonce, &[])
+}
+
+pub fn decrypt_with_aad(
+    ciphertext: &[u8],
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+) -> Result<Vec<u8>, String> {
     let cipher = ChaCha20Poly1305::new(key.into());
     let nonce = Nonce::from_slice(nonce);
     cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(
+            nonce,
+            chacha20poly1305::aead::Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
         .map_err(|_| "ChaCha20-Poly1305 解密失败：数据已损坏或密钥不匹配".to_string())
 }
 

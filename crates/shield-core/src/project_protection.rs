@@ -1,4 +1,4 @@
-//! 自动按包名和运行证书保存项目身份；每次构建派生独立材料，不改变手机安装即用的契约。
+//! 自动按包名和运行证书保存项目身份；离线材料按项目派生，BYOS 使用独立随机材料。
 use crate::local_secret::{
     decode_hex, decrypt_secret, derive_crypto_key, encode_hex, encrypt_secret,
 };
@@ -190,9 +190,14 @@ pub(crate) fn build_material(
     directory: &Path,
     package: &str,
     certificate: &str,
-) -> Result<([u8; 32], ProjectIdentity, String)> {
+    byos: bool,
+) -> Result<([u8; 32], ProjectIdentity, Option<String>)> {
     let certificate = crate::apk_inspect::normalize_fingerprint(certificate).to_ascii_lowercase();
     let backup = load_or_create(directory, package, &certificate)?;
+    if byos {
+        // 项目身份仅用于归属；即使导出项目种子，也不能据此重建 BYOS 产物密钥。
+        return Ok((rand::random(), backup.identity, None));
+    }
     let seed = checked(&backup)?;
     let mut salt = [0u8; 32];
     rand::rng().fill_bytes(&mut salt);
@@ -200,7 +205,7 @@ pub(crate) fn build_material(
     Hkdf::<Sha256>::new(Some(&salt), &seed)
         .expand(b"shellsmith-build-ikm-v1", &mut ikm)
         .map_err(|_| anyhow::anyhow!("派生项目构建材料失败"))?;
-    Ok((ikm, backup.identity, encode_hex(&salt)))
+    Ok((ikm, backup.identity, Some(encode_hex(&salt))))
 }
 
 pub fn list(directory: &Path) -> Result<Vec<ProjectIdentity>> {
@@ -275,20 +280,24 @@ mod tests {
     fn automatic_identity_is_isolated_atomic_and_backup_safe() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let certificate = "a".repeat(64);
-        let (key, info, _) = build_material(dir.path(), "com.example.one", &certificate)?;
-        let (next, same, _) =
-            build_material(dir.path(), "com.example.one", &("AA:".repeat(31) + "AA"))?;
+        let (key, info, _) = build_material(dir.path(), "com.example.one", &certificate, false)?;
+        let (next, same, _) = build_material(
+            dir.path(),
+            "com.example.one",
+            &("AA:".repeat(31) + "AA"),
+            false,
+        )?;
         assert_eq!(info, same);
         assert_ne!(key, next);
         assert_ne!(
             info.id,
-            build_material(dir.path(), "com.example.two", &certificate)?
+            build_material(dir.path(), "com.example.two", &certificate, false)?
                 .1
                 .id
         );
         assert_ne!(
             info.id,
-            build_material(dir.path(), "com.example.one", &"b".repeat(64))?
+            build_material(dir.path(), "com.example.one", &"b".repeat(64), false)?
                 .1
                 .id
         );
@@ -297,7 +306,7 @@ mod tests {
                 let path = dir.path().to_owned();
                 let cert = certificate.clone();
                 std::thread::spawn(move || {
-                    build_material(&path, "com.example.concurrent", &cert)
+                    build_material(&path, "com.example.concurrent", &cert, false)
                         .unwrap()
                         .1
                 })
@@ -312,10 +321,10 @@ mod tests {
         assert_eq!(info, import(other.path(), &backup)?);
         assert_eq!(
             info,
-            build_material(other.path(), "com.example.one", &certificate)?.1
+            build_material(other.path(), "com.example.one", &certificate, false)?.1
         );
         let conflict = tempfile::tempdir()?;
-        build_material(conflict.path(), "com.example.one", &certificate)?;
+        build_material(conflict.path(), "com.example.one", &certificate, false)?;
         assert!(import(conflict.path(), &backup).is_err());
         let conn = connection(dir.path())?;
         let stored: String=conn.query_row("SELECT secret FROM protection_projects WHERE package_name=?1 AND certificate_sha256=?2", params!["com.example.one",certificate], |r| r.get(0))?;
@@ -324,13 +333,45 @@ mod tests {
             "UPDATE protection_projects SET secret='corrupted' WHERE package_name=?1",
             ["com.example.one"],
         )?;
-        assert!(build_material(dir.path(), "com.example.one", &certificate).is_err());
+        assert!(build_material(dir.path(), "com.example.one", &certificate, false).is_err());
         assert_eq!(info, import(dir.path(), &backup)?);
         assert_eq!(
             info,
-            build_material(dir.path(), "com.example.one", &certificate)?.1
+            build_material(dir.path(), "com.example.one", &certificate, false)?.1
         );
-        assert!(build_material(dir.path(), "../bad", &certificate).is_err());
+        assert!(build_material(dir.path(), "../bad", &certificate, false).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn byos_material_is_independent_of_exported_project_seed() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let certificate = "a".repeat(64);
+        let package = "com.example.keys";
+        let (offline, identity, salt) = build_material(dir.path(), package, &certificate, false)?;
+        let backup_path = dir.path().join("backup.json");
+        export(dir.path(), &identity.id, &backup_path)?;
+        let backup: Backup = serde_json::from_slice(&fs::read(&backup_path)?)?;
+        let mut recovered = [0; 32];
+        Hkdf::<Sha256>::new(
+            Some(&decode_hex(&salt.unwrap()).unwrap()),
+            &checked(&backup)?,
+        )
+        .expand(b"shellsmith-build-ikm-v1", &mut recovered)
+        .unwrap();
+        assert_eq!(offline, recovered, "保留离线项目派生契约");
+
+        let (byos, same, salt) = build_material(dir.path(), package, &certificate, true)?;
+        assert_eq!(identity, same);
+        assert!(salt.is_none(), "BYOS 不应报告项目派生盐值");
+        assert_ne!(byos, recovered);
+        assert_ne!(byos, checked(&backup)?);
+        let restored = tempfile::tempdir()?;
+        assert_eq!(identity, import(restored.path(), &backup_path)?);
+        let (next, same, salt) = build_material(restored.path(), package, &certificate, true)?;
+        assert_eq!(identity, same);
+        assert!(salt.is_none());
+        assert_ne!(byos, next, "同一项目备份不能复现 BYOS 构建密钥");
         Ok(())
     }
 }

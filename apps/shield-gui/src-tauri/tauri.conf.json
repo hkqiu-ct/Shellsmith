@@ -46,6 +46,8 @@
       "../../../tools/licenses/XopProtector-NOTICE.txt": "licenses/XopProtector-NOTICE.txt",
       "../../../shield-stub/build/outputs/resources/resources.zip": "resources/resources.zip",
       "../../../shield-stub/build/outputs/resources/resources-api19.zip": "resources/resources-api19.zip",
+      "../../../shield-stub/build/outputs/resources/resources-byos.zip": "resources/resources-byos.zip",
+      "../../../shield-stub/build/outputs/resources/resources-byos-play.zip": "resources/resources-byos-play.zip",
       "../../../shield-stub/build/outputs/resources/mocika-play-delivery-api.jar": "resources/mocika-play-delivery-api.jar"
     },
     "linux": {

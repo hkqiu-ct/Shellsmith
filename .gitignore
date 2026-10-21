@@ -1,5 +1,7 @@
 # Build outputs
 build/
+shield-stub/build-byos/
+shield-stub/build-byos-play/
 *.apk
 *.aab
 *-output/

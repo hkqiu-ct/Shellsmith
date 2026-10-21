@@ -435,7 +435,19 @@ export type IosProtectRequest = {
 export type { SharingChoice, SharingInspection } from "./application-sharing-state";
 import type { SharingChoice, SharingInspection } from "./application-sharing-state";
 
+export type ByosProfile = { id: string; name: string; endpoint: string; authMode: "device_approval" | "play_integrity"; runtimeCert: string | null };
+export const byosRequirements = {
+  device_approval: { minSdk: 26, platform: "Android 8.0+" },
+  play_integrity: { minSdk: 29, platform: "Android 10+" },
+} as const;
+export type ByosConnectionCheck = { code: string; elapsedMs: number; httpStatus: number | null };
+export type ByosProfileInput = Omit<ByosProfile, "id"> & { id: string | null; apiKey: string | null };
+
 export const api = {
+  testByosConnection: (input: ByosProfileInput) => invoke<ByosConnectionCheck>("test_byos_connection", { input }),
+  listByosProfiles: () => invoke<ByosProfile[]>("list_byos_profiles"),
+  saveByosProfile: (input: ByosProfileInput) => invoke<ByosProfile>("save_byos_profile", { input }),
+  deleteByosProfile: (id: string) => invoke<void>("delete_byos_profile", { id }),
   inspectApplicationSharing: (path: string) => invoke<SharingInspection | null>("inspect_application_sharing", { path }),
   releaseApplicationInspection: (inspectionId: string) => invoke<void>("release_application_inspection", { inspectionId }),
   saveApplicationSharing: (inspectionId: string, enabled: boolean) => invoke<void>("save_application_sharing", { inspectionId, enabled }),
@@ -443,7 +455,7 @@ export const api = {
     invoke<ApkCheckResult>("check_apk", { path, runtimeMode, certificateId: certificateId ?? null }),
   checkAab: (path: string) => invoke<AabInspection>("check_aab", { path }),
   protectAab: (request: AabProtectRequest) => invoke<void>("protect_aab", { request }),
-  protectApk: (taskId: string, input: string, output: string, runtimeMode: "standard" | "android_api19", environmentPolicy: "compatible" | "strict", protectionProfile: "compat" | "balanced" | "strict", aiResistance: "off" | "balanced" | "high", xopPvm2PackerPath: string | null, xopTrueVmpPrefixes: string[], signedOutput?: string | null, certificateId?: string | null, excludedAbis: string[] = [], sharing: SharingChoice | null = null, runtimeUi: RuntimeUiProtection = defaultRuntimeUi, pvm2RequiredMethods: string | null = null, nativeVmpEvidence: string | null = null) =>
+  protectApk: (taskId: string, input: string, output: string, runtimeMode: "standard" | "android_api19", environmentPolicy: "compatible" | "strict", protectionProfile: "compat" | "balanced" | "strict", aiResistance: "off" | "balanced" | "high", xopPvm2PackerPath: string | null, xopTrueVmpPrefixes: string[], signedOutput?: string | null, certificateId?: string | null, excludedAbis: string[] = [], sharing: SharingChoice | null = null, runtimeUi: RuntimeUiProtection = defaultRuntimeUi, pvm2RequiredMethods: string | null = null, nativeVmpEvidence: string | null = null, byosProfileId: string | null = null) =>
     invoke<void>("protect_apk", {
       request: {
         taskId,
@@ -461,6 +473,7 @@ export const api = {
         xopTrueVmpPrefixes,
         pvm2RequiredMethods,
         nativeVmpEvidence,
+        byosProfileId,
         excludedAbis,
         certificateId: certificateId ?? null,
       },

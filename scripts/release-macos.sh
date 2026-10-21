@@ -106,7 +106,9 @@ check_env() {
 build_stub() {
   info "构建 shield-stub（resources.zip）..."
   cd "$ROOT"
-  SHIELD_VERSION="$VERSION" bash scripts/build-stub.sh
+  SHIELD_VERSION="$VERSION" MOCIKA_BYOS_RUNTIME=1 bash scripts/build-stub.sh
+  SHIELD_VERSION="$VERSION" MOCIKA_BYOS_RUNTIME=1 MOCIKA_BYOS_PLAY_INTEGRITY=1 bash scripts/build-stub.sh
+  SHIELD_VERSION="$VERSION" MOCIKA_BYOS_RUNTIME=0 MOCIKA_BYOS_PLAY_INTEGRITY=0 bash scripts/build-stub.sh
   SKIP_STANDARD_STUB_BUILD=1 bash scripts/build-android-api19-resources.sh
   RESOURCES_ZIP="$ROOT/shield-stub/build/outputs/resources/resources.zip"
   if [[ ! -f "$RESOURCES_ZIP" ]]; then
@@ -295,6 +297,8 @@ package_cli() {
 
   cp "$ROOT/shield-stub/build/outputs/resources/resources.zip" "$CLI_PKG_DIR/resources/resources.zip"
   cp "$ROOT/shield-stub/build/outputs/resources/resources-api19.zip" "$CLI_PKG_DIR/resources/resources-api19.zip"
+  cp "$ROOT/shield-stub/build/outputs/resources/resources-byos.zip" "$CLI_PKG_DIR/resources/"
+  cp "$ROOT/shield-stub/build/outputs/resources/resources-byos-play.zip" "$CLI_PKG_DIR/resources/"
   cp "$ROOT/shield-stub/build/outputs/resources/mocika-play-delivery-api.jar" "$CLI_PKG_DIR/resources/mocika-play-delivery-api.jar"
 
   cat > "$CLI_PKG_DIR/shield.sh" << 'RUNEOF'
@@ -463,7 +467,7 @@ main() {
   check_env
   if [[ "$SKIP_STUB_BUILD" == "1" ]]; then
     info "复用现有 Android 运行时资源（SKIP_STUB_BUILD=1）"
-    for resource in resources.zip resources-api19.zip mocika-play-delivery-api.jar; do
+    for resource in resources.zip resources-api19.zip resources-byos.zip resources-byos-play.zip mocika-play-delivery-api.jar; do
       [[ -f "$ROOT/shield-stub/build/outputs/resources/$resource" ]] || error \
         "缺少现有运行时资源: $resource"
     done

@@ -1,256 +1,75 @@
-# BYOS 包外密钥功能完整实现计划
+# BYOS 包外密钥实现计划与交付范围
 
-## Context
+本分支目标：保留默认本地离线加固，增加用户自建 HTTPS 服务的包外密钥模式。Shellsmith 不运营共享密钥服务。具体服务开发输入见 [HTTPS 密钥服务接入协议](byos-key-server.md)。
 
-**问题根源：** DEXB v6 格式的全部密钥材料（IKM、包裹密钥的两个输入：证书指纹 + build_id）均存放在 APK 文件头部明文区域。任何人拿到 APK 文件即可离线还原 IKM 并解密业务代码。项目自身 `rea-resilience.md`（2026-10-19）实测确认：11,613 个 PVM2 保护方法和 27 个 SO 可被公开材料 100% 还原，3 次独立构建规范化指令摘要完全一致，REA 没有被防住。
+## 背景与边界
 
-**目标：** 引入双模式架构：
-- **模式一（默认，本地离线）：** 维持现有 DEXB v6 逻辑，现有用户零影响
-- **模式二（BYOS 服务端）：** 用户自带服务器（BYOS = Bring Your Own Server），APK 头部只存 `token_id + server_url`，真正的 IKM 由服务端在运行时下发，App 启动时通过 Play Integrity 鉴权后才能拿到密钥
+DEXB v6 的证书指纹、build_id、包裹 IKM 和派生逻辑都随 APK 交付，因此仓库白盒工具可以只用包内公开材料恢复载荷。既有 REA 验证只代表对应样本、方法范围和工具版本，不能转换成所有项目的还原成功概率。
 
-**已确认的关键决策：**
-- 运行时鉴权方案：Play Integrity（确认，排除嵌入 api_key 方案，后者对静态分析者无效）
-- Shellsmith 官方不运营共享托管服务，只定义协议，用户自带服务器
-- Android 4.4 工控兼容线明确不支持 BYOS（无 GMS）
-- 默认模式永远不受影响
+BYOS 的 DEXB v7 从 APK 移除 IKM 包裹字段；每次进程加载必须经用户服务按显式选择的设备批准或 Play Integrity 策略授权后获取 IKM。虚拟化与运行时策略继续复用；本功能不承诺阻止授权进程中的 Hook、内存转储或解密 DEX 缓存提取。
 
----
+## 实施时修正的约束
 
-## 实现范围与文件清单
+- **系统范围**：设备授权要求输入 APK minSdkVersion >= 26。API 26～30 的 AndroidKeyStore 依赖全局 Application，取钥期间暂时提供已 attach 的壳 Application，成功、拒绝、超时均恢复原状态；字段不可访问时失败关闭。Play SDK 1.4.0 自身要求 API 23，但壳的同步启动路径使用 API 29 的公开服务绑定 Executor，避免主线程等待与服务连接回调互锁，所以 Play 模式仍要求 minSdkVersion >= 29。默认离线兼容范围不变。
+- **请求绑定**：随机 request_id 与端点、token、包名、证书、时间、授权方式和两份公钥一起哈希为 nonce；服务端验证设备签名及批准记录，或 Google 解码结果，并原子消费 nonce。
+- **信任来源**：API key 只用于构建注册，必须由服务端预先绑定应用、最终签名、授权方式及发布策略。手机自报身份不能成为放行依据。
+- **密钥来源**：BYOS 每次构建独立随机生成 32 字节 IKM，不由本机项目种子派生，不进入项目备份或报告。客户服务可适配自己的密钥库/KMS/HSM 封存 IKM，账号/签名/许可证用于授权；这些材料不能直接替代产物 IKM。构建机内存仍会持有当次 IKM。
+- **运行时隔离**：设备授权资源无 Google SDK；Play SDK 仅进入专用 Play 资源，与离线/设备资源分开构建。仅保留 Classic 取钥路径，将依赖一起改名，并对输出残留公共 SDK 类名作失败检查。
+- **缓存认证**：命中解密 DEX 缓存也必须重新取钥；没有 PVM2 的包也执行该检查。
+- **头部认证**：v7 从 magic 到 payload_nonce 的完整头部作为 ChaCha20-Poly1305 AAD。修改端点、token、build_id 或其他头部字段会使解密失败。
+- **现有兼容**：继续读取 v5/v6，默认新包仍生成 v6。v7 取钥失败无离线回退。
+- **授权方式**：device_approval 使用 Android Keystore EC 签名和客户服务端批准；play_integrity 使用 Play 关联应用的 Classic API。没有默认 Play 必填、没有鉴权降级。本轮支持 GUI 与 CLI 的 APK 流程；AAB、iOS 和 API 19 BYOS 不在当前交付范围。
+- **响应加密**：取钥协议 2 使用每次请求新的 RSA-2048 公钥，OAEP SHA-256/MGF1-SHA256 包裹请求摘要与 IKM，拒绝旧的明文 IKM 响应。设备授权只证明持有批准密钥，不证明应用版本或完整性。
 
-### 阶段一：DEXB v7 格式与 CLI 打包端
+## 实现清单
 
-**1. `crates/shield-core/src/dex_packer/packer.rs`**
+| 部分 | 实现与检查 |
+|---|---|
+| 核心打包 | `pack_byos`、共享明文载荷构造、独立 v7 头部与 AAD；v6 格式不变 |
+| 连接检查 | GUI 草稿/已存配置调用只读 `/v1/keys/check`；HTTPS、凭据、模式/协议检查，结果脱敏；不注册 IKM、不写草稿 |
+| 客户密钥后端 | 自有随机主密钥、KMS/HSM 均由客户 HTTPS 服务适配，主秘密不进入桌面/APK；连接检查识别固定的后端未就绪错误，成功响应与手机协议不变 |
+| 注册客户端 | `ureq` 同步 HTTPS，标准 base64，禁止跳转，15 秒超时，响应长度/令牌校验，错误脱敏 |
+| 核心流程 | endpoint/API key/auth 三项完整校验，专用 Runtime 能力验证，注册 IKM 后打包，报告区分交付模式 |
+| GUI | 加固设置中新增/编辑/选择服务；设备授权默认无 Google 配置；API key 仅后端读取，整套配置 AEAD 加密保存，绑定独立随机本地密钥 |
+| CLI | `--byos-auth`、`--byos-endpoint`、`--byos-api-key` / `SHELLSMITH_BYOS_API_KEY`、最终证书覆盖参数；凭据不进 TOML |
+| Manifest | 最低系统检查，BYOS 能力标记、联网权限；仅 Play 模式增加商店可见性；不静默提高 minSdk |
+| Java | 工作线程发起证明/HTTPS，设备授权适配 API 26～30 的启动上下文，Play 使用 API 29 服务回调，响应身份绑定，整个等待 8 秒上限，不保存 IKM |
+| Rust/JNI | v7 严格解析，回调 Java 取钥，复用 HKDF 与 DEX/PVM2/资源/Native 派生，缓存路径同样认证 |
+| 构建 | `make build-byos` 输出设备资源 `resources-byos.zip`，`make build-byos-play` 输出 `resources-byos-play.zip`，四 ABI；不会覆盖默认 `resources.zip` |
+| 分发 | GUI/CLI 发布包包含离线、设备批准、Play 三套隔离资源；资源检查脚本核对实际 ZIP 的模式与 Google 依赖 |
+| 白盒检查 | 识别合法 v7 后记录 `external_key_required`；未知版本或截断为检查错误，不作防护成功 |
+| 服务文档 | 条件配置、设备批准/业务授权接入点、Google 结果验证、加密响应、防重放、吊销与联调清单 |
 
-目标状态：
-- 版本号常量：`DEXB_VERSION_OFFLINE: u32 = 6`，`DEXB_VERSION_BYOS: u32 = 7`
-- `pack()` 方法：与现在完全一致（v6 格式），不得改变任何现有行为
-- `pack_byos(output_path, ikm, signature, token_id, server_url)` 方法：写 v7 格式头部
-- v7 头部布局（字节序均为 LE）：
-  ```
-  magic(4B "DEXB") | version(4B = 7) | dex_count(4B) | flags(4B)
-  | sig_len(1B) | signature(sig_len B)
-  | build_id(16B)
-  | token_id_len(2B u16) | token_id(N B)
-  | server_url_len(2B u16) | server_url(M B)
-  | payload_nonce(12B)
-  | ciphertext
-  ```
-  注意：v7 无 `wrap_nonce` 和 `wrapped_ikm` 字段，APK 内不包含任何可还原 IKM 的材料
-- 两个方法共用 `build_payload()` 辅助（压缩 + 加密逻辑不重复）
-- 原有测试 `parse_bin()` 和所有 `#[test]` 保持通过，新增 v7 格式的 round-trip 测试
-- `离线仅凭包内头部即可还原_ikm_与载荷_这是已知边界()` 测试继续通过（v6 行为不变）；新增对称测试：v7 包无法离线还原
+## v7 字节布局
 
-**2. `crates/shield-core/src/dex_packer/mod.rs`**
+所有整数为小端，字符串为 UTF-8（当前地址/令牌限定 ASCII）。
 
-- 现有 `pack_dex_files_with_layers()` 走 v6，不变
-- 新增 `pack_dex_files_byos(input_dir, output_bin, ikm, signature, token_id, server_url, compression_layers)` 函数，内部调用 `packer::DexPacker::pack_byos()`
-
-**3. `crates/shield-core/src/remote_key.rs`**
-
-CLI 侧（加固时上传 IKM 到 BYOS 服务端）：
-
-```rust
-pub fn register_ikm(endpoint: &str, ikm: &[u8], api_key: &str) -> Result<String>
+```text
+magic(4 = DEXB) | version(u32 = 7) | dex_count(u32) | flags(u32)
+| sig_len(u8 = 64) | signature(sig_len)
+| build_id(16)
+| token_id_len(u16) | token_id
+| server_url_len(u16) | server_url
+| payload_nonce(12)
+| ciphertext_and_tag
 ```
 
-- POST `{endpoint}/v1/keys/register`
-- 请求体：`{"ikm": "<base64>", "api_key": "<api_key>"}`（api_key 用于加固端身份验证，不嵌入 APK）
-- 返回服务端分配的 `token_id`
-- 使用 `ureq` crate（纯 Rust、同步、无 async 依赖）
-- base64 编码使用标准库或已有依赖，不手写
+v7 没有 wrap_nonce、wrapped_ikm 或明文 IKM。密文之前的全部字节为 AAD。载荷仍是原有压缩 DEX/可选 PVM2 容器，派生仍用 IKM、payload_nonce、证书指纹；修改端点或 token 后必须重新加固，不能只改头部。
 
-**4. `crates/shield-core/Cargo.toml`**
+## 验证要求
 
-- 新增 `ureq = { version = "2", features = ["tls"] }`（CLI 侧 HTTP）
-- 新增 `base64 = "0.22"` 或使用已有的 `sha2` 依赖提供的 base64（确认后选择）
+本地无需真实服务的检查：
 
-**5. `crates/shield-core/src/protect_api.rs`**
-
-`ProtectOptions` 结构体（当前 `protect_api.rs:59`）新增两个字段：
-
-```rust
-/// BYOS 模式：服务端 API 基础地址。None 时走默认 v6 离线路径。
-pub byos_endpoint: Option<String>,
-/// BYOS 模式：加固端认证凭据，用于上传 IKM 时向服务端鉴权。不写入 APK。
-pub byos_api_key: Option<String>,
-```
-
-- 两个字段均为 `None` 时：走现有 v6 路径（所有现有代码路径不受影响）
-- 两个字段均有值时：调用 `remote_key::register_ikm()` 上传 IKM，走 v7 打包路径
-- 任一字段为 `Some` 而另一个为 `None`：在 `protect_apk()` 入口处提前报错，提示用户必须同时配置两个字段
-
-**6. `crates/shield-core/src/lib.rs`**
-
-- 新增 `mod remote_key;` 并 `pub use remote_key::register_ikm;`（或仅模块内可见，根据是否需要对外暴露决定）
-
----
-
-### 阶段二：Stub 侧运行时密钥拉取
-
-**7. `shield-stub/build.gradle.kts`**
-
-dependencies 块新增：
-```kotlin
-implementation("com.google.android.play:integrity:1.4.0")
-```
-
-**8. `shield-stub/src/main/java/dev/mocika/shield/loader/Ld.java`**
-
-新增方法（不修改任何现有方法）：
-
-```java
-static byte[] fetchRemoteIkm(Context ctx, String serverUrl, String tokenId, String certFingerprint)
-```
-
-完整流程：
-1. `IntegrityManagerFactory.create(ctx)` 获取 `IntegrityManager`
-2. 生成 UUID v4 作为 `nonce`（防重放，绑定到此次请求）
-3. `integrityManager.requestIntegrityToken(IntegrityTokenRequest.newBuilder().setNonce(nonce).build())` — 异步，需要在主线程外调用，内部用 `Task.await()` 或 `CountDownLatch` 同步等待
-4. 取得 `integrityToken` 后，用 `HttpURLConnection` POST 到 `{serverUrl}/v1/keys/fetch`：
-   ```json
-   {
-     "token_id": "<tokenId>",
-     "integrity_token": "<integrityToken>",
-     "nonce": "<nonce>",
-     "cert_fingerprint": "<certFingerprint>",
-     "timestamp": <unix_seconds>
-   }
-   ```
-5. 解析响应 JSON，取出 `ikm` 字段（base64 解码）返回 `byte[]`
-6. 任何失败（网络错误、鉴权失败、服务端返回非 200）：抛出 `SecurityException`，不降级到包内材料
-
-注意：Play Integrity API 要求 Google Play Services，在 `catch(Exception)` 中需要区分"GMS 不可用"（抛 `SecurityException`）vs "临时网络错误"（可以有限重试或也抛 `SecurityException`，保持简单）
-
-**9. `shield-stub/src/main/rust/src/lib.rs`**
-
-在 `f2`（绑定到 `STUB_METHOD_EXTRACT_DECRYPT`，当前 `lib.rs:80`）中，DEXB 版本检测逻辑：
-
-```
-读取头部 version 字段（偏移 4，4字节 LE）
-  version == 6 → 现有 v6 路径（完全不变）
-  version == 7 → v7 路径：
-    从头部解析 token_id、server_url
-    回调 Java: Ld.fetchRemoteIkm(ctx, server_url, token_id, cert_fingerprint) -> byte[]
-    拿到 IKM 后走与 v6 完全相同的 HKDF 派生 + ChaCha20-Poly1305 解密
-  其他版本 → 返回错误
-```
-
-v7 头部解析偏移：
-```
-[0..4]   magic
-[4..8]   version = 7
-[8..12]  dex_count
-[12..16] flags
-[16]     sig_len
-[17..17+sig_len]  signature
-[17+sig_len..17+sig_len+16]  build_id
-[17+sig_len+16..+2]  token_id_len (u16 LE)
-[...+token_id_len]   token_id
-[...+2]              server_url_len (u16 LE)
-[...+server_url_len] server_url
-[...+12]             payload_nonce
-[...]                ciphertext
-```
-
-新增 JNI 方法注册：在 `JNI_OnLoad` 的 RegisterNatives 数组中加入 `Ld.fetchRemoteIkm` 对应的 native 方法（如果回调需要 native 桥接），或直接在 Rust 中通过 `env.call_static_method` 调用 Java 静态方法（更简单，无需新注册项）
-
-**10. `shield-stub/src/main/rust/src/crypto.rs`（Stub 侧）**
-
-确认现有 `derive_key()` 接口签名不变——v7 的 IKM 来源不同但派生逻辑完全复用，无需修改。
-
----
-
-### 阶段三：BYOS 服务端参考文档
-
-**11. `docs/design/byos-key-server.md`（新建）**
-
-内容：
-- BYOS 定位声明：Shellsmith 只定义协议，不运营服务器；用户自建自运维
-- API 契约：
-  - `POST /v1/keys/register`：加固工具调用，上传 IKM，返回 `token_id`
-  - `POST /v1/keys/fetch`：App 运行时调用，提交 Play Integrity token，返回 IKM
-- 请求/响应 JSON schema（含必填字段和类型）
-- Play Integrity token 服务端验证流程（调用 Google Integrity Verdicts API，检查 `appRecognitionVerdict = PLAY_RECOGNIZED` 等字段）
-- 防重放设计：`nonce`（UUID v4，服务端记录已用 nonce）+ `timestamp`（允许 ±5 分钟偏差）
-- TLS 要求（仅接受 HTTPS，证书钉选建议）
-- 密钥存储建议：数据库侧 IKM 加密存储（不以明文落盘）
-- 速率限制、吊销、备份建议
-- 不支持 BYOS 的设备范围：Android 4.4 工控线、无 GMS 设备（如 HMS 华为）
-
----
-
-### 阶段四：文档更新
-
-**12. `docs/design/internals.md`**
-
-在现有 DEXB v6 格式表后新增 v7 格式定义表，标注与 v6 的差异（无 wrap_nonce/wrapped_ikm，改为 token_id/server_url）。
-
-**13. `docs/design/android-code-protection-upgrade.md`**
-
-更新 2026-10-14 决策记录：原"维护者不提供或运维授权服务器"范围限定为"默认离线模式不依赖维护者服务器"；BYOS 模式下用户自带服务器，Shellsmith 只定义协议。
-
----
-
-## 不在本轮范围内
-
-- Shellsmith 官方托管共享密钥服务（需独立商业/法律决策，后续单独立项）
-- iOS 侧对应实现
-- Android 4.4 工控兼容线的 BYOS 支持（该线路明确排除，文档注明）
-- GUI 侧的 BYOS 配置界面（本轮只做 CLI，GUI 作为后续迭代）
-- 密钥轮换/吊销的完整管理界面（文档描述协议，实现由用户自己在服务端完成）
-
----
-
-## 验证方案
-
-### 单元测试（不需要真实服务端）
-
-`crates/shield-core/src/dex_packer/packer.rs` 测试块：
-- `v7_pack_byos_no_wrapped_ikm_in_header()`：v7 产物头部不包含任何可还原 IKM 的材料，即 `wrapped_ikm` 字段不存在，头部字节中不出现明文 IKM
-- `v7_pack_byos_roundtrip()`：v7 产物可被正确解析出 `token_id`、`server_url`、`dex_count` 等字段；ciphertext 在已知 IKM（模拟服务端返回）下可正确解密
-- 现有全部测试必须继续通过
-
-`crates/shield-core/src/remote_key.rs` 测试：
-- `register_ikm_posts_correct_fields()`：用 mockito 或 wiremock 起一个 mock HTTP server，验证请求 body 包含 base64 编码的 ikm 和 api_key 字段，返回 token_id
-
-### 集成测试
-
-`tests/scripts/check-rea-resilience.py` 现有框架，对 v7 产物执行"仅凭 APK 白盒恢复"检查：
-- **预期结果：无法还原**（APK 内无 IKM），这是与 v6 最关键的验收差异
-- 具体：`ApkRecoveryCheck` 对 v7 产物应返回"无法还原 IKM"而非 panic 或误报通过
-
-CLI 验证：
 ```bash
-shield protect --byos-endpoint https://your-server.com --byos-api-key YOUR_KEY -i app.apk -o protected.apk
+cargo test -p shield-core -p shield-cli -p mocika-shield
+cargo test -p shield-core v7_java_whitebox -- --ignored
+MOCIKA_BYOS_RUNTIME=1 ./shield-stub/gradlew -p shield-stub testReleaseUnitTest
+make build-stub build-byos build-byos-play
+python3 tests/scripts/check-byos-resources.py
 ```
-验证产物头部：`version = 7`，有 `token_id` 字段，无 `wrapped_ikm` 字段。
 
-### 设备验证（人工）
+覆盖构建注册请求、错误/重定向拒绝、凭据脱敏、CLI 成对参数、SDK 门槛、nonce 跨语言固定向量、v7 三种压缩层的打包与真实 Rust 解析器往返、缓存无密钥失败、错误 IKM、v6 公开派生材料失效、头部与密文篡改、截断，以及 Java 白盒的合法/未知/截断格式分类。
 
-- 安装 v7 加固包（有服务端）：首次启动触发联网 → Play Integrity 鉴权 → 服务端返回 IKM → App 正常启动
-- 安装 v7 加固包（断网）：启动失败，抛 `SecurityException`，logcat 输出固定错误码（如 `S01`），不降级到包内材料
-- 安装 v6 加固包（默认）：行为与现在完全一致，无任何变化
+**未完成的外部验收**：用户尚无 HTTPS 服务和 Play 测试环境，不能声称真实注册/证明校验/最终 APK 启动已通过。服务搭建后须验证设备批准前后、撤销和密钥丢失后的重批；Play 模式另验测试轨道、Google 证明与配额。两种方式均验证首启、缓存启动、断网、重放、延时与 ANR。APK 白盒检查本身不能证明服务器安全。
 
----
-
-## 实现顺序建议
-
-1. 完善 `packer.rs`（`pack_byos()` 和 `build_payload()`），跑现有测试确认全部通过
-2. 完善 `remote_key.rs`（替换手写 base64，完善 register 接口）
-3. 更新 `Cargo.toml`（添加 `ureq`）和 `protect_api.rs`（添加 `byos_endpoint`/`byos_api_key` 字段）
-4. 更新 `lib.rs`（导出 `remote_key` 模块）
-5. 接入 `protect_apk()` 流程（在现有 DEX 打包步骤处根据 `byos_endpoint` 分支）
-6. Stub 侧：`Ld.java` 新增 `fetchRemoteIkm()`，`build.gradle.kts` 添加依赖
-7. Stub 侧：`lib.rs` 的 `f2` 新增 v7 分支
-8. 写文档：`byos-key-server.md`，更新 `internals.md` 和 `android-code-protection-upgrade.md`
-9. 补测试，运行全量测试套件
-
----
-
-## 关键约束
-
-- **v6 路径必须零改动**：任何现有用户的加固流程不受影响
-- **v7 失败不降级**：运行时拉取 IKM 失败必须明确报错，禁止静默降级到包内材料（否则攻击者可以故意打垮服务端来绕过保护）
-- **api_key 不进 APK**：`byos_api_key` 只用于加固端上传 IKM 时鉴权，不写入 DEXB 头部
-- **Play Integrity 不可降级**：Play Integrity 不可用时（无 GMS），启动直接失败，不切换到更弱的鉴权方案
+本地实现与回归的实际命令、结果记录在 [BYOS 本地验收记录](../process/byos-local-validation.md)。

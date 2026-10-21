@@ -342,6 +342,23 @@ pub(crate) struct ProtectXopArgs {
 
 #[derive(Args, Default)]
 pub(crate) struct ProtectArgs {
+    /// 用户自有 HTTPS 密钥服务；与 --byos-auth 配套，默认离线加固不需要。
+    #[arg(long, requires_all = ["byos_api_key", "byos_auth"])]
+    pub byos_endpoint: Option<String>,
+    /// 构建端凭据；推荐使用 SHELLSMITH_BYOS_API_KEY，不写入 APK 或配置文件。
+    #[arg(
+        long,
+        env = "SHELLSMITH_BYOS_API_KEY",
+        hide_env_values = true,
+        requires_all = ["byos_endpoint", "byos_auth"]
+    )]
+    pub byos_api_key: Option<String>,
+    /// 显式授权方式：device_approval（服务端批准设备）或 play_integrity（Google Play）。
+    #[arg(long, requires_all = ["byos_endpoint", "byos_api_key"])]
+    pub byos_auth: Option<shield_core::ByosAuth>,
+    /// 最终分发签名证书 SHA-256；省略时绑定输入 APK 证书。
+    #[arg(long)]
+    pub runtime_cert_sha256: Option<String>,
     #[command(flatten)]
     pub runtime_ui: RuntimeUiArgs,
     /// 明确排除不需要且不受支持的 ABI（逗号分隔），仅对本次任务有效。
@@ -489,5 +506,73 @@ impl RuntimeUiArgs {
             resource_name_keep: Some(v.resource_name_keep),
             ui_packer,
         }
+    }
+}
+
+#[cfg(test)]
+mod byos_tests {
+    use super::*;
+
+    #[test]
+    fn byos_arguments_are_paired_and_secrets_are_not_persisted() {
+        assert!(Cli::try_parse_from(["shield", "protect", "--byos-api-key", "test"]).is_err());
+        assert!(Cli::try_parse_from([
+            "shield",
+            "protect",
+            "--byos-endpoint",
+            "https://keys.example",
+            "--byos-api-key",
+            "test"
+        ])
+        .is_err());
+        for mode in ["device_approval", "play_integrity"] {
+            assert!(Cli::try_parse_from([
+                "shield",
+                "protect",
+                "--byos-endpoint",
+                "https://keys.example",
+                "--byos-api-key",
+                "test",
+                "--byos-auth",
+                mode
+            ])
+            .is_ok());
+        }
+        assert!(Cli::try_parse_from([
+            "shield",
+            "protect",
+            "--byos-endpoint",
+            "https://keys.example",
+            "--byos-api-key",
+            "test",
+            "--byos-auth",
+            "none"
+        ])
+        .is_err());
+        let parsed = Cli::try_parse_from([
+            "shield",
+            "protect",
+            "--byos-endpoint",
+            "https://keys.example",
+            "--byos-api-key",
+            "test",
+            "--byos-auth",
+            "device_approval",
+            "--runtime-cert-sha256",
+            "AB",
+        ])
+        .unwrap();
+        if let Commands::Protect(args) = parsed.command {
+            assert_eq!(args.byos_endpoint.as_deref(), Some("https://keys.example"));
+            assert_eq!(args.byos_api_key.as_deref(), Some("test"));
+            assert_eq!(args.byos_auth, Some(shield_core::ByosAuth::DeviceApproval));
+            assert_eq!(args.runtime_cert_sha256.as_deref(), Some("AB"));
+        } else {
+            panic!("错误命令");
+        }
+        assert!(
+            toml::from_str::<crate::config::CliConfig>("[protect]\nbyos_api_key = 'secret'")
+                .is_err()
+        );
     }
 }

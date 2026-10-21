@@ -10,6 +10,7 @@ pub(crate) fn process_dex(
     signature: &str,
     ikm: &[u8],
     compression_layers: u8,
+    byos: Option<(&str, &str)>,
 ) -> Result<CacheIdentity> {
     let mut dex_files = Vec::new();
     for entry in fs::read_dir(apk_dir)? {
@@ -66,13 +67,25 @@ pub(crate) fn process_dex(
     }
 
     let tmp_bin = apk_dir.parent().unwrap().join("app.bin.tmp");
-    crate::dex_packer::pack_dex_files_with_layers(
-        &dex_dir,
-        &tmp_bin,
-        ikm,
-        signature,
-        compression_layers,
-    )?;
+    if let Some((token, endpoint)) = byos {
+        crate::dex_packer::pack_dex_files_byos(
+            &dex_dir,
+            &tmp_bin,
+            ikm,
+            signature,
+            token,
+            endpoint,
+            compression_layers,
+        )?;
+    } else {
+        crate::dex_packer::pack_dex_files_with_layers(
+            &dex_dir,
+            &tmp_bin,
+            ikm,
+            signature,
+            compression_layers,
+        )?;
+    }
 
     let bin_size = fs::metadata(&tmp_bin)?.len();
     print_success(&format!("DEX打包完成: {}", human_size(bin_size)));

@@ -93,6 +93,27 @@ def main():
                             str(work / 'recovered'), zstd, str(args.report)],
                            stdout=log, stderr=log, check=True, timeout=180)
         recovery = json.loads((work / 'recovered/recovery.json').read_text(encoding='utf-8'))
+        with zipfile.ZipFile(args.protected_apk) as apk:
+            summary['native_diagnostic_matches'] = {}
+            for name in apk.namelist():
+                if name.startswith('lib/') and name.endswith('.so'):
+                    binary = apk.read(name)
+                    summary['native_diagnostic_matches'][name] = sum(binary.count(marker) for marker in DIAGNOSTICS)
+        if args.require_private_diagnostics:
+            if not summary['native_diagnostic_matches']:
+                raise ValueError('未检查到 Native 库，不能判定发布诊断检查通过')
+            if any(summary['native_diagnostic_matches'].values()):
+                raise ValueError('产物仍携带内部诊断或性能采样文本')
+        if recovery.get('status') == 'external_key_required':
+            if recovery.get('dexb_version') != 7 or recovery.get('header_structure') != 'valid':
+                raise ValueError('没有成功识别 v7 结构，不能归因于缺少包外密钥')
+            summary.update(status='complete', dexb_version=7,
+                           apk_only_payload_recovery='external_key_required',
+                           aead_authentication=recovery['aead_authentication'],
+                           protection_effectiveness='not_established',
+                           limitation=recovery['limitation'])
+            print('REA 直接扫描及 v7 结构检查完成；需要外部密钥，不据此宣称不可还原。')
+            return
         verified = sum(row['artifact_verified'] for row in report['methods'])
         if verified == 0 or verified != recovery['verified_trampolines']:
             raise ValueError('逐方法报告与恢复跳板数量不一致')
@@ -128,17 +149,6 @@ def main():
                             'same_decompiled_text': before['source']['text'] == after['source']['text'],
                             'before_representation': before['representation'], 'after_representation': after['representation']})
         summary['method_samples'] = samples
-        with zipfile.ZipFile(args.protected_apk) as apk:
-            summary['native_diagnostic_matches'] = {}
-            for name in apk.namelist():
-                if name.startswith('lib/') and name.endswith('.so'):
-                    binary = apk.read(name)
-                    summary['native_diagnostic_matches'][name] = sum(binary.count(marker) for marker in DIAGNOSTICS)
-        if args.require_private_diagnostics:
-            if not summary['native_diagnostic_matches']:
-                raise ValueError('未检查到 Native 库，不能判定发布诊断检查通过')
-            if any(summary['native_diagnostic_matches'].values()):
-                raise ValueError('产物仍携带内部诊断或性能采样文本')
         summary['status'] = 'complete'
         print('REA 回归完成；白盒已恢复 %d 个镜像，不能宣称 APK 载荷保密。' % summary['recovered_images'])
     except Exception:

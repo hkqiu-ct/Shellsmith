@@ -104,6 +104,12 @@ expect_file "tools/apksigner.jar" "开发工具 apksigner 存在"
 expect_file "shield-stub/build/outputs/resources/resources.zip" "resources.zip 已生成"
 expect_file "shield-stub/build/outputs/resources/resources-api19.zip" "resources-api19.zip 已生成"
 
+if python3 tests/scripts/check-byos-resources.py; then
+  ok "BYOS 分发资源及授权隔离一致"
+else
+  fail "BYOS 分发资源不完整或模式不匹配"
+fi
+
 info "检查分发物版本与哈希"
 if [[ -e "tools/apktool_3.0.1.jar" ]]; then
   fail "旧版 apktool_3.0.1.jar 仍存在，必须删除以免混用"

@@ -8,6 +8,9 @@ val runtimeProfileEnabled = providers.environmentVariable("MOCIKA_RUNTIME_PROFIL
     .orNull == "1"
 val legacyByteArrayEnabled = providers.environmentVariable("MOCIKA_LEGACY_BYTE_ARRAY")
     .orNull == "1"
+val byosRuntime = providers.environmentVariable("MOCIKA_BYOS_RUNTIME").orNull == "1"
+val byosPlay = byosRuntime && providers.environmentVariable("MOCIKA_BYOS_PLAY_INTEGRITY").orNull == "1"
+if (byosRuntime) layout.buildDirectory.set(file(if (byosPlay) "build-byos-play" else "build-byos"))
 // 原生库启动期完整性校验：Release 默认开启，Debug 默认关闭；显式设置环境变量
 // 可覆盖该默认值（1 开启，0 关闭）。校验失败会直接拒绝启动。
 val nativeSelfCheckOverride = providers.environmentVariable("MOCIKA_NATIVE_SELF_CHECK").orNull
@@ -23,9 +26,9 @@ android {
 
     defaultConfig {
         // 保留 API 19～20 的 Dalvik 分支；正式兼容资源仍使用独立的 r25c Native 库。
-        minSdk = 19
+        minSdk = if (byosPlay) 29 else if (byosRuntime) 26 else 19
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = if (byosRuntime && !byosPlay) "dev.mocika.shield.loader.ByosDeviceContractTest" else "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
 
         ndk {
@@ -40,7 +43,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            // BYOS 与其依赖在构建脚本中一起混淆，避免把 Google 类留给宿主解析。
+            isMinifyEnabled = !byosRuntime
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             buildConfigField("boolean", "DEBUG_LOGS", "false")
             buildConfigField("boolean", "NATIVE_SELF_CHECK", nativeSelfCheckReleaseEnabled.toString())
@@ -71,6 +75,13 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs("build/jniLibs")
+            java.srcDir(if (byosRuntime) "src/byos/java" else "src/offline/java")
+            if (byosRuntime) java.srcDir(if (byosPlay) "src/byosPlay/java" else "src/byosDevice/java")
+        }
+        if (byosRuntime) getByName("test").java.srcDir("src/byosTest/java")
+        if (byosRuntime && !byosPlay) getByName("androidTest") {
+            java.srcDir("src/byosDeviceTest/java")
+            manifest.srcFile("src/byosDeviceTest/AndroidManifest.xml")
         }
     }
 }
@@ -100,8 +111,26 @@ tasks.named("preBuild") {
 }
 
 dependencies {
+    if (byosPlay) implementation("com.google.android.play:integrity:1.4.0")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.junit)
+}
+
+// 只导出已经由 Gradle 解析的运行时依赖，不额外下载或修改宿主工程。
+tasks.register("exportByosDependencies") {
+    doLast {
+        check(byosRuntime)
+        val destination = layout.buildDirectory.dir("byos-dependencies").get().asFile
+        destination.deleteRecursively()
+        destination.mkdirs()
+        configurations.getByName("releaseRuntimeClasspath").files.forEachIndexed { index, artifact ->
+            if (artifact.extension == "aar") {
+                copy { from(zipTree(artifact)); include("classes.jar", "proguard.txt"); into(File(destination, index.toString())) }
+            } else if (artifact.extension == "jar") {
+                artifact.copyTo(File(destination, "$index.jar"))
+            }
+        }
+    }
 }
 
 // Release AAR 的 runtime jar 是 R8 裁剪后的发布入口，内部类会被重命名或移除；

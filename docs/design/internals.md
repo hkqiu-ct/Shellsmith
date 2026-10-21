@@ -223,6 +223,24 @@ Offset     Size      字段             说明
 
 > **magic / version / dex_count / flags / sig_len / signature / build_id / nonce / wrapped_ikm 为头部字段**。v6 不直接保存明文 IKM；runtime 使用当前签名指纹和 build_id 派生包裹密钥后再解封 IKM。这里的签名指纹和 `build_id` 都会随 APK 暴露，因此该包裹层的安全收益是提高静态扫描和批量恢复成本，不是把客户端 IKM 变成不可获取的秘密；运行时仍必须假设有权限的分析者可以通过调试、Hook 或内存转储恢复解密材料。真正的授权秘密和高价值业务规则不能放在客户端。v5 仅作为迁移格式读取，新包不再生成 v5。
 
+### 可选 BYOS：DEXB v7
+
+默认仍输出 v6；CLI 显式配置用户 HTTPS 服务、构建凭据及 `--byos-auth` 时输出 v7。设备批准使用 `resources-byos.zip`（Android 8.0+），Play 使用 `resources-byos-play.zip`（Android 10+）。
+
+| 顺序 | 字段 | 长度 |
+|---|---|---|
+| 1 | magic / version / dex_count / flags | 各 4 字节，version=7 |
+| 2 | sig_len / 最终签名证书大写十六进制 SHA-256 | 1 + 64 字节 |
+| 3 | build_id | 16 字节 |
+| 4 | token_id_len / token_id | u16 LE + 对应字节 |
+| 5 | server_url_len / server_url | u16 LE + 对应字节 |
+| 6 | payload_nonce | 12 字节 |
+| 7 | ciphertext + Poly1305 tag | 载荷长度 + 16 字节 |
+
+v7 不包含 wrap_nonce、wrapped_ikm 或明文 IKM；第 1～6 行的所有字节作为 AEAD 附加认证数据。取钥成功后复用原 HKDF 与载荷结构，头部篡改、错误密钥和认证失败均拒绝。首次加载及缓存加载都访问用户服务，无离线降级。默认 DEX 缓存仍可能在应用私有目录落盘，这不是防动态提取方案。
+
+服务须将 token 绑定到应用、最终证书和授权方式，按设备批准记录或 Google Play 证明授权。取钥协议 2 绑定本次响应公钥，使用 RSA-OAEP 加密 IKM，拒绝明文响应；详见 [BYOS 接入协议](byos-key-server.md)。只移除包内 IKM 不代表服务端授权已安全，也不代表运行后无法获得明文。
+
 解密后的明文（payload）格式：
 
 ```

@@ -167,6 +167,9 @@ jobs:
       - name: 检查 Rust Clippy
         run: cargo clippy -p shield-core -p shield-ios -p shield-cli --all-targets -- -D warnings
 
+      - name: 验证 BYOS 真实 TLS 连接及证书拒绝
+        run: cargo test -p shield-core connection_probe_real_tls -- --ignored
+
       - name: 运行 Rust 单元测试
         run: |
           cargo test -p shield-core
@@ -260,7 +263,7 @@ jobs:
         run: npm ci
 
       - name: 构建 shield-stub
-        run: make build-stub
+        run: make build-stub build-byos build-byos-play
 
       - name: 检查 Stub DEX 指标
         run: make audit-stub-dex
@@ -312,13 +315,13 @@ jobs:
           rustup toolchain install 1.77.2 --profile minimal --target armv7-linux-androideabi
 
       - name: 构建 shield-stub
-        run: make build-stub
+        run: make build-stub build-byos build-byos-play
 
       - name: 上传 resources.zip
         uses: actions/upload-artifact@v7
         with:
           name: resources-zip
-          path: shield-stub/build/outputs/resources/resources.zip
+          path: shield-stub/build/outputs/resources/resources*.zip
           if-no-files-found: error
 
       - name: 运行端到端加固回归测试
@@ -413,7 +416,7 @@ jobs:
           rustup toolchain install 1.77.2 --profile minimal --target armv7-linux-androideabi
 
       - name: 构建 shield-stub
-        run: make build-stub
+        run: make build-stub build-byos build-byos-play
 
       - name: 运行发布前检查
         run: bash scripts/check-release-ready.sh

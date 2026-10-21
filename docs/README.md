@@ -74,3 +74,5 @@ Shellsmith 是 Android 与 iOS 双平台应用加固工具。Android 流程加�
 - `AGENTS.md` 只保留项目专属高优先级约束和文档导航，详细流程放入 `docs/`。
 - 涉及构建命令、发布产物命名、版本同步规则时，同时核对 `Makefile` 和 `scripts/`。
 - 文档中描述路线图功能时直接写功能名称，不使用内部追踪编号。
+
+- [BYOS HTTPS 密钥服务](design/byos-key-server.md)：用户自建服务所需信息、接口与联调要求。

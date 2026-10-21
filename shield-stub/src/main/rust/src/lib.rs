@@ -519,8 +519,7 @@ extern "C" fn f2(
     result_array.into_raw()
 }
 
-/// A valid on-disk DEX cache skips the normal decrypt call, but the process-local
-/// PVM2 state must still be rebuilt on every cold start.
+/// 缓存命中也须重建进程级 PVM2 状态；BYOS 无 PVM2 时同样重新取钥并认证载荷。
 extern "C" fn f6(mut env: JNIEnv, _class: JClass, ctx: JObject, dex_data: JByteArray) -> jboolean {
     let result = (|| -> Result<(), String> {
         let dex_bytes = env
@@ -531,21 +530,27 @@ extern "C" fn f6(mut env: JNIEnv, _class: JClass, ctx: JObject, dex_data: JByteA
         let actual_signature =
             jni_get_actual_signature(&mut env, &ctx).map_err(|e| format!("e3: {e}"))?;
         let (expected_signature, xop, assets_key, native_so_key) =
-            bin_loader::parse_xop_pvm2_payload(payload, actual_signature.as_bytes())?;
-        let (code, mut key) =
-            xop.ok_or_else(|| "PVM2 marker exists without sidecar".to_string())?;
-        let initialized = (|| {
-            if !expected_signature.is_empty()
-                && !timing_safe_eq(actual_signature.as_bytes(), expected_signature.as_bytes())
-            {
-                return Err("e4".to_string());
-            }
-            assets_pas2::initialize(assets_key)?;
-            native_so::initialize_wrap_key(native_so_key)?;
-            xop_pvm2::initialize(&code, &mut key)
-        })();
-        xop_pvm2::wipe_key(&mut key);
-        initialized
+            bin_loader::parse_xop_pvm2_payload_with_fetch(
+                payload,
+                actual_signature.as_bytes(),
+                |url, token, cert| jni_fetch_remote_ikm(&mut env, &ctx, url, token, cert),
+            )?;
+        if !expected_signature.is_empty()
+            && !timing_safe_eq(actual_signature.as_bytes(), expected_signature.as_bytes())
+        {
+            return Err("e4".to_string());
+        }
+        if xop.is_none() && payload.get(4..8) != Some(7u32.to_le_bytes().as_slice()) {
+            return Err("缺少 PVM2 载荷".to_string());
+        }
+        assets_pas2::initialize(assets_key)?;
+        native_so::initialize_wrap_key(native_so_key)?;
+        if let Some((code, mut key)) = xop {
+            let result = xop_pvm2::initialize(&code, &mut key);
+            xop_pvm2::wipe_key(&mut key);
+            result?;
+        }
+        Ok(())
     })();
     match result {
         Ok(()) => JNI_TRUE,
@@ -636,9 +641,12 @@ fn decrypt_dex_files(
     let payload = bin_loader::extract_from_dex_tail(&dex_bytes)
         .map_err(|e| format!("提取 MSHD payload 失败: {e}"))?;
     let actual_signature = jni_get_actual_signature(env, ctx).map_err(|e| format!("e3: {e}"))?;
-    let mut decoded =
-        bin_loader::parse_and_decompress_payload(payload, actual_signature.as_bytes())
-            .map_err(|e| format!("解密解压失败: {e}"))?;
+    let mut decoded = bin_loader::parse_and_decompress_payload_with_fetch(
+        payload,
+        actual_signature.as_bytes(),
+        |url, token, cert| jni_fetch_remote_ikm(env, ctx, url, token, cert),
+    )
+    .map_err(|e| format!("解密解压失败: {e}"))?;
     if !decoded.expected_signature.is_empty()
         && !timing_safe_eq(
             actual_signature.as_bytes(),
@@ -657,4 +665,44 @@ fn decrypt_dex_files(
     assets_pas2::initialize(decoded.assets_pas2_key)?;
     native_so::initialize_wrap_key(decoded.native_so_key)?;
     Ok(decoded)
+}
+
+// 两种解密入口和缓存入口共用回调；Java 仅在工作线程中访问网络。
+fn jni_fetch_remote_ikm(
+    env: &mut JNIEnv,
+    ctx: &JObject,
+    url: &str,
+    token: &str,
+    cert: &str,
+) -> Result<Vec<u8>, String> {
+    let url = env.new_string(url).map_err(|_| "K01")?;
+    let token = env.new_string(token).map_err(|_| "K01")?;
+    let cert = env.new_string(cert).map_err(|_| "K01")?;
+    let value = env
+        .call_static_method(
+            env!("STUB_BINLOADER_CLASS"),
+            "fetchRemoteIkm",
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)[B",
+            &[
+                JValue::Object(ctx),
+                JValue::Object(&url),
+                JValue::Object(&token),
+                JValue::Object(&cert),
+            ],
+        )
+        .and_then(|v| v.l())
+        .map_err(|_| "K01")?;
+    if value.is_null() {
+        return Err("K01".into());
+    }
+    let array = JByteArray::from(value);
+    let key = env.convert_byte_array(&array).map_err(|_| "K01")?;
+    // JNI 拷贝后清除 Java 返回数组；不缓存、不写磁盘。
+    let zeros = [0i8; 32];
+    if key.len() != 32 {
+        return Err("K01".into());
+    }
+    env.set_byte_array_region(&array, 0, &zeros)
+        .map_err(|_| "K01")?;
+    Ok(key)
 }

@@ -41,6 +41,9 @@ pub(crate) fn run_protect(args: ResolvedProtectArgs) -> Result<()> {
     }
 
     let opts = ProtectOptions {
+        byos_endpoint: args.byos_endpoint,
+        byos_api_key: args.byos_api_key,
+        byos_auth: args.byos_auth,
         runtime_ui: args.runtime_ui,
         ui_packer_path: args.ui_packer,
         excluded_abis: args.excluded_abis,
@@ -50,7 +53,7 @@ pub(crate) fn run_protect(args: ResolvedProtectArgs) -> Result<()> {
         resources_path: args.resources,
         apksigner_path: args.apksigner,
         expected_output_cert_fingerprint: None,
-        runtime_cert_fingerprint: None,
+        runtime_cert_fingerprint: args.runtime_cert_sha256,
         environment_policy: match args.environment_policy {
             EnvironmentPolicyArg::Compatible => EnvironmentPolicy::Compatible,
             EnvironmentPolicyArg::Strict => EnvironmentPolicy::Strict,
@@ -87,7 +90,11 @@ pub(crate) fn run_protect(args: ResolvedProtectArgs) -> Result<()> {
             "{}",
             contract_event_json(
                 fusion_plan.contract_version,
-                fusion_plan.dex_protocol_version,
+                if opts.byos_endpoint.is_some() {
+                    7
+                } else {
+                    fusion_plan.dex_protocol_version
+                },
                 fusion_plan.profile.as_str(),
                 fusion_plan.ai_resistance.as_str(),
                 fusion_plan.ai_resistance.compression_layers(),
@@ -404,6 +411,9 @@ pub fn run_protect_aab_with_control(
     match args.engine {
         ProtectionEngineArg::Mocika => {
             let protect_opts = ProtectOptions {
+                byos_endpoint: None,
+                byos_api_key: None,
+                byos_auth: None,
                 runtime_ui: runtime_ui.clone(),
                 ui_packer_path: args.runtime_ui.ui_packer.clone(),
                 excluded_abis: args.exclude_abis.clone(),

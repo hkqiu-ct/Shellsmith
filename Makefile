@@ -1,3 +1,5 @@
+# Runtime 构建共用 JNI 中间目录，禁止 make 并行交叉覆盖。
+.NOTPARALLEL:
 VERSION    := $(shell grep '^version' apps/shield-cli/Cargo.toml | head -1 | sed 's/version = "\([^"]*\)"/\1/')
 CLI_BIN    := target/release/shield
 DIST_DIR   := dist
@@ -26,6 +28,8 @@ help:
 	@echo "  test-pvm2-runtime      检查 Native 明文生命周期、并发与 JNI 执行"
 	@echo "  build-cli              编译 shield-cli（当前平台 release）"
 	@echo "  build-stub             构建 shield-stub（Android AAR + 资源包）"
+	@echo "  build-byos             构建设备授权 BYOS 资源（无 Google 依赖）"
+	@echo "  build-byos-play        构建 Google Play 授权专用资源"
 	@echo "  audit-stub-dex         输出 Stub DEX 指标并检查膨胀上限（需先 build-stub）"
 	@echo "  build-gui              构建 shield-gui Tauri 桌面应用（需先 build-stub）"
 	@echo "  build-all              build-stub + build-cli + build-gui（Tauri）"
@@ -56,6 +60,21 @@ test-pvm2-runtime:
 	$(PYTHON) tests/scripts/check-pvm2-runtime.py
 	cargo test --manifest-path shield-stub/src/main/rust/Cargo.toml xop_pvm2
 
+.PHONY: build-byos build-byos-play
+build-byos: build-pvm2
+ifeq ($(OS),Windows_NT)
+	set MOCIKA_BYOS_RUNTIME=1&& set MOCIKA_BYOS_PLAY_INTEGRITY=0&& powershell -ExecutionPolicy Bypass -File scripts/build-stub.ps1
+else
+	MOCIKA_BYOS_RUNTIME=1 MOCIKA_BYOS_PLAY_INTEGRITY=0 bash scripts/build-stub.sh
+endif
+
+build-byos-play: build-pvm2
+ifeq ($(OS),Windows_NT)
+	set MOCIKA_BYOS_RUNTIME=1&& set MOCIKA_BYOS_PLAY_INTEGRITY=1&& powershell -ExecutionPolicy Bypass -File scripts/build-stub.ps1
+else
+	MOCIKA_BYOS_RUNTIME=1 MOCIKA_BYOS_PLAY_INTEGRITY=1 bash scripts/build-stub.sh
+endif
+
 build-stub: build-pvm2
 	@echo "🤖 构建 shield-stub..."
 	$(BUILD_STUB_CMD)
@@ -76,7 +95,7 @@ audit-stub-dex:
 		--output shield-stub/build/outputs/resources/stub-dex-metrics.json
 	@echo "✅ Stub DEX 指标: shield-stub/build/outputs/resources/stub-dex-metrics.json"
 
-build-gui:
+build-gui: build-byos build-byos-play
 	@echo "🖥️  构建 shield-gui（Tauri）..."
 	cd apps/shield-gui && cargo tauri build --no-bundle
 ifeq ($(OS),Windows_NT)

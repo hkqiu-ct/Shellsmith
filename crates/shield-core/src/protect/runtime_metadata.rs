@@ -15,6 +15,8 @@ pub(crate) struct RuntimeMetadata {
     pub(crate) runtime_ui: bool,
     pub(crate) environment_policy: bool,
     pub(crate) memory_dex: bool,
+    pub(crate) byos_remote_key: bool,
+    pub(crate) byos_auth: Option<crate::ByosAuth>,
     pub(crate) xop_pvm2: bool,
     /// 壳运行时静态链入的 Xop 解释器支持的最高 PVM2 镜像格式版本。
     /// 旧资源包没有该字段时为 None；启用 PVM2 必须重建资源包。
@@ -37,6 +39,29 @@ impl RuntimeMetadata {
         let environment_policy = parse_bool(json, "environment_policy")
             .context("metadata.json 缺少 environment_policy")?;
         let memory_dex = parse_bool(json, "memory_dex").context("metadata.json 缺少 memory_dex")?;
+        let byos_remote_key = parse_bool(json, "byos_remote_key").unwrap_or(false);
+        let byos_auth: Option<crate::ByosAuth> = if byos_remote_key {
+            anyhow::ensure!(
+                parse_u32(json, "byos_fetch_protocol") == Some(2),
+                "BYOS 资源需支持加密取钥协议 2，请重建"
+            );
+            Some(
+                parse_string(json, "byos_auth")
+                    .context("BYOS 资源缺少授权方式")?
+                    .parse()
+                    .map_err(anyhow::Error::msg)?,
+            )
+        } else {
+            None
+        };
+        if let Some(auth) = byos_auth {
+            anyhow::ensure!(
+                parse_u32(json, "min_android_api") == Some(auth.min_android_api()),
+                "BYOS {} Runtime 的最低 API 必须为 {}，请重建对应资源",
+                auth.as_str(),
+                auth.min_android_api()
+            );
+        }
         // 旧资源包不具备已静态链入的 Xop 解释器，缺失时必须失败关闭。
         let xop_pvm2 = parse_bool(json, "xop_pvm2").unwrap_or(false);
         let (xop_vm_bridge, xop_vm_bridge_method) = if xop_pvm2 {
@@ -107,6 +132,8 @@ impl RuntimeMetadata {
             native_alias: NativeAliasProtocol::parse(json)?,
             environment_policy,
             memory_dex,
+            byos_remote_key,
+            byos_auth,
             xop_pvm2,
             xop_pvm2_format: parse_u32(json, "xop_pvm2_format"),
             xop_vm_bridge,
@@ -180,6 +207,51 @@ mod tests {
         "environment_policy":false,
         "memory_dex":false
     }"#;
+
+    #[test]
+    fn byos_requires_explicit_mode_and_encrypted_fetch_protocol() {
+        for auth in [
+            crate::ByosAuth::DeviceApproval,
+            crate::ByosAuth::PlayIntegrity,
+        ] {
+            let mode = auth.as_str();
+            let min_api = auth.min_android_api();
+            let json = METADATA.replace("\"memory_dex\":false", &format!("\"memory_dex\":false,\"byos_remote_key\":true,\"byos_auth\":\"{mode}\",\"byos_fetch_protocol\":2,\"min_android_api\":{min_api}"));
+            assert_eq!(
+                RuntimeMetadata::parse(&json)
+                    .unwrap()
+                    .byos_auth
+                    .unwrap()
+                    .as_str(),
+                mode
+            );
+            for invalid in [
+                json.replace(mode, "none"),
+                json.replace("\"byos_fetch_protocol\":2", "\"byos_fetch_protocol\":1"),
+                json.replace(
+                    &format!("\"min_android_api\":{min_api}"),
+                    "\"min_android_api\":25",
+                ),
+                json.replace(
+                    &format!("\"min_android_api\":{min_api}"),
+                    "\"min_android_api\":30",
+                ),
+                json.replace(
+                    &format!("\"min_android_api\":{min_api}"),
+                    &format!(
+                        "\"min_android_api\":{}",
+                        if min_api == 26 { 29 } else { 26 }
+                    ),
+                ),
+            ] {
+                assert!(RuntimeMetadata::parse(&invalid).is_err());
+            }
+        }
+        assert!(RuntimeMetadata::parse(METADATA)
+            .unwrap()
+            .byos_auth
+            .is_none());
+    }
 
     #[test]
     fn parses_supported_capabilities() {

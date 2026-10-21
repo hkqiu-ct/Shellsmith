@@ -27,6 +27,23 @@ pub fn pack_dex_files_with_layers(
     signature: &str,
     compression_layers: u8,
 ) -> Result<()> {
+    collect_packer(input_dir, compression_layers)?.pack(output_bin, ikm, signature)
+}
+
+pub fn pack_dex_files_byos(
+    input_dir: &Path,
+    output_bin: &Path,
+    ikm: &[u8],
+    signature: &str,
+    token_id: &str,
+    server_url: &str,
+    compression_layers: u8,
+) -> Result<()> {
+    collect_packer(input_dir, compression_layers)?
+        .pack_byos(output_bin, ikm, signature, token_id, server_url)
+}
+
+fn collect_packer(input_dir: &Path, compression_layers: u8) -> Result<packer::DexPacker> {
     if !input_dir.is_dir() {
         anyhow::bail!("输入目录不存在: {:?}", input_dir);
     }
@@ -58,9 +75,7 @@ pub fn pack_dex_files_with_layers(
         packer.add_entry(&pvm2_sidecar, XOP_PVM2_SIDECAR_NAME)?;
     }
 
-    packer.pack(output_bin, ikm, signature)?;
-
-    Ok(())
+    Ok(packer)
 }
 
 fn collect_dex_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
