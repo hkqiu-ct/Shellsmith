@@ -6,6 +6,8 @@
 
 **适用范围：** Android APK；设备授权要求输入应用的 `minSdkVersion >= 26`（Android 8.0），Google Play Integrity 授权要求 `minSdkVersion >= 29`（Android 10）。支持桌面 GUI 和 CLI `protect`。AAB、iOS、Android 4.4 兼容运行时不支持此接入方式。默认离线加固无需密钥服务。
 
+**服务端参考实现：** 需要可直接部署的 Go/PostgreSQL 参考实现、KMS/HSM 适配、管理员命令和部署验收步骤时，见 [BYOS 密钥服务端参考实现](byos-key-server-reference.md)。
+
 阅读顺序：
 
 1. [了解流程与职责](#流程与职责)
