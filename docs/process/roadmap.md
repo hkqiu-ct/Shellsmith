@@ -33,7 +33,7 @@
 |------|------|
 | DEXB v6 不提供对静态分析的机密性 | 包裹密钥的两个输入（证书指纹、build_id）都在包内明文头部，仅凭 APK 即可离线还原 IKM，并派生 PVM2、assets、业务 SO 的密钥。该层实际提供的是「改包重签后无法运行」与提高自动化分析成本。详见[技术内参](../design/internals.md)的「DEXB v6 的机密性边界」 |
 | 原生库可被替换 | 壳运行时先 `System.loadLibrary`，之后 `RuntimeSecurity` 才执行 `NativeIntegrity`。后者已覆盖 `nativeLibraryDir` 与 APK/ABI split 两条路径并对完整 ELF 做 SHA-256，但被替换的 `.so` 可在校验前执行；`.so` 内 constructor 也不构成新信任根。该检查属于检测增强，不是修复。 |
-| 运行期存在明文落盘 | 解密后的 DEX 缓存、assets 与业务 `.so` 均写入应用私有目录且不清理 |
+| 运行期存在明文落盘（待核） | 待核：解密后的 DEX 缓存、assets 与业务 `.so` 是否写入应用私有目录、是否存在清理路径，尚未逐项复核；复核前不作为已确认边界。 |
 | BYOS 单设备 IKM 泄漏 | 同一产物所有设备最终得到同一把 IKM；per-device wrapping 只改变信封，不改变明文，不能阻止一台设备提取 IKM 后解开同一产物的其他副本。要阻断必须 per-device payload/不同产物，和当前单 APK 分发模式冲突。现有协议覆盖网络侧、重放和服务端越权，不覆盖已授权设备内存提取；记录为明确边界，不列为待办。 |
 
 ### 待修（按严重度，尚未排期）
