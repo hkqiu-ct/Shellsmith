@@ -33,7 +33,7 @@ ANDROID_SDK_ROOT=/本机/Android/sdk \
 
 修改发布版 Native 日志、PVM2 格式或抗分析策略后，还需执行 [REA 分层回归](../design/rea-resilience.md)。发布产物使用 `--require-private-diagnostics` 检查四 ABI，完整保留“包内材料仍可恢复”的检查结果；不得将工具错误计为防护有效。`make test-pvm2-runtime` 同时验证开发/发布模式下的 Native 语义和诊断收敛，生产 `NDEBUG` 不关闭测试断言。
 
-修改 TheRouter 注册兼容后，执行 `python3 tests/scripts/check-therouter-compat.py --serial 目标设备序列号`（同上 JDK/SDK/CLI 前置条件）。脚本模拟编译期注册和运行时索引协议，分别验证未加固、首次和缓存启动中的服务、路由、参数注入与 PVM2 调用，并确认未知注册模式被拒绝；不覆盖已有同名测试包，结束后卸载本次样本。省略设备仅检查产物。真实业务仍需补测页面跳转与框架初始化时序。
+修改路由注册或路由 assets 保护后，执行 `python3 tests/scripts/check-therouter-compat.py --serial 目标设备序列号`（脚本默认启用 `--protect-route-assets`，并断言产物只含 `.rtap`、不含明文 `.txt`）（同上 JDK/SDK/CLI 前置条件）。脚本模拟编译期注册和运行时索引协议，分别验证未加固、首次和缓存启动中的服务、路由、参数注入与 PVM2 调用，并确认未知注册模式被拒绝；不覆盖已有同名测试包，结束后卸载本次样本。省略设备仅检查产物。真实业务仍需补测页面跳转与框架初始化时序。
 
 编译期注册的准入依据是 [TheRouter 上游插件](https://github.com/HuolalaTech/hll-wp-therouter-android/blob/dev/buildSrc/src/main/java/com/therouter/plugin/AddCodeVisitor.java) 写入的 `asm=true`：当前仅确认标准注入类的单静态布尔字段布局，允许无初始化器或仅 `return-void` 的空初始化器；其他布局继续要求已支持的运行时索引，不按类名猜测已注册。1.2.4、1.4.0-rc1 注入类的 D8/R8 转换共 8 组标记检查通过；模拟协议整包在 Android 15/arm64 真机的两条路径共 6 次启动通过，不代表任意 TheRouter 版本或任意项目均已验证。
 
