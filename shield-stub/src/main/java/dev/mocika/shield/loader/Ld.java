@@ -62,6 +62,9 @@ public class Ld {
     /** Decrypt one authenticated PAS1 record contained in a PAS2 asset stream. */
     static native byte[] u(byte[] encryptedChunk);
 
+    /** Decrypt one RTA1 route-index sidecar; kind is 1 for ARouter and 2 for TheRouter. */
+    static native byte[] z(byte[] encryptedBlob, int kind);
+
     /** Authenticate and install the per-build business-SO key table. */
     static native String[] w(byte[] encryptedKeyTable);
 

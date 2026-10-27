@@ -213,6 +213,16 @@ shield protect -i input.apk -o protected.apk \
 
 可重复传入 `--xop-true-vmp-prefix`。前缀必须指向自有业务类，建议先从少量纯业务方法开始，避免把 Activity、Application、框架回调和大型 SDK 全包虚拟化。所选 Runtime 必须声明 `xop_pvm2=true`；API19 资源不支持此能力并会在变换前拒绝。
 
+需要同时保护 ARouter/TheRouter 路由索引时追加 `--protect-route-assets`：
+
+```bash
+shield protect -i input.apk -o protected.apk \
+  --profile strict \
+  --protect-route-assets
+```
+
+启用后产物只写 `assets/arouter_routes.rtap` / `assets/therouter_registry.rtap`，不再写同名 `.txt`；壳在 DEX 解密后使用同一 IKM 的域分离密钥在内存中解密，再交给现有路由兼容层。该选项要求壳运行时与打包器来自同一发布资源；旧壳读取不到 `.rtap` 时不会自动回退到明文。未启用时保持原明文行为。
+
 GUI 安装包已经内置 Xop PVM2 Packer：Packer 路径留空即使用内置版本，无需额外选择文件；“选择自定义 Packer JAR”会覆盖内置版本，“恢复使用内置 Packer”可随时切回。自定义 JAR 会以当前用户权限在本机执行，因此必须来自可信来源，并兼容 `pvm2-transform`、code.bin v4 容器、PVM2 v8 镜像及 schema 2 方法报告契约（当前运行时也可读取 v7 旧镜像）；输出仍会由核心验证。业务类前缀可在“调整设置 → Xop PVM2 方法虚拟化”中用逗号填写，也可仅提供关键方法清单。严格模式要求 PVM2 转换成功率至少达到 70%，并输出选中、尝试、成功、跳过原因及未覆盖指令统计；低于门槛会失败关闭。该比率为成功数除以尝试数，部分提前跳过的方法不进入分母，不能据此声称全部业务或关键方法已获得保护。严格代码保护只有在标准运行时、Java 17+、可用 Packer 和有效选择范围都就绪时才允许开始；路径和业务类名不会出现在脱敏诊断摘要中，摘要只记录 PVM2 是否已配置。
 
 PVM2 自 v7 起已支持普通/复杂条件分支、`switch`、异常表与 `throw`、对象/原始数组、标准反射调用所需的 invoke 路径，以及 `monitor-enter/exit` 同步语义。每次构建会改变虚拟 Opcode、虚拟寄存器映射、立即数编码、Handler 顺序，并从三套 Dispatcher 模板中选择一套；覆盖报告中的 `isa` 可用于确认变体。仍不满足契约的方法（例如个别 `invoke-custom`/`invoke-polymorphic`、超出寄存器或代码预算的方法）必须记入跳过原因，不能当作成功。

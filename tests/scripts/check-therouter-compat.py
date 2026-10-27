@@ -67,6 +67,7 @@ for mode in ['asm', 'index', 'unknown']:
         'ServiceProvider__TheRouter__test': 'package a; public class ServiceProvider__TheRouter__test { public void init() { ' + PACKAGE + '.State.services++; } }',
         'RouterMap__TheRouter__test': 'package a; public class RouterMap__TheRouter__test { public void init() { ' + PACKAGE + '.State.routes++; } }',
         'TheRouterServiceProvideInjecter': 'package a; public class TheRouterServiceProvideInjecter { public static final boolean asm=' + str(mode == 'asm').lower() + '; }',
+        'ARouterRoute': 'package com.alibaba.android.arouter.routes; class ARouter$$Root$$test {}',
     }
     if mode == 'index':
         sources['RenamedIndex'] = base + '''public class RenamedIndex {
@@ -125,6 +126,7 @@ for mode in ['asm', 'index', 'unknown']:
                '--resources', ROOT / 'shield-stub/build/outputs/resources/resources.zip',
                '--apktool', ROOT / 'tools/apktool_3.0.3.jar', '--apksigner', ROOT / 'tools/apksigner.jar',
                '--profile', 'strict', '--ai-resistance', 'high', '--environment-policy', 'strict',
+               '--protect-route-assets',
                '--xop-pvm2-packer', ROOT / 'tools/xop-pvm2-packer.jar',
                '--xop-true-vmp-prefix', 'L' + PACKAGE.replace('.', '/') + '/Business;']
     output = run(command, check=mode != 'unknown')
@@ -137,7 +139,15 @@ for mode in ['asm', 'index', 'unknown']:
     assert report['output_sha256'] == hashlib.sha256((directory / 'signed.apk').read_bytes()).hexdigest()
     assert any(row['descriptor'].endswith('->calc(I)I') and row['artifact_verified'] for row in report['methods'])
     with zipfile.ZipFile(protected) as apk:
-        assert ('assets/therouter_registry.txt' in apk.namelist()) == (mode == 'index')
+        names = apk.namelist()
+        assert 'assets/arouter_routes.rtap' in names
+        assert 'assets/arouter_routes.txt' not in names
+        if mode == 'index':
+            assert 'assets/therouter_registry.rtap' in names
+            assert 'assets/therouter_registry.txt' not in names
+        else:
+            assert 'assets/therouter_registry.rtap' not in names
+            assert 'assets/therouter_registry.txt' not in names
     scenarios = []
     installed = False
     try:

@@ -113,6 +113,7 @@ pub struct DecodedPayload {
     pub xop_pvm2: Option<(Vec<u8>, [u8; 16])>,
     pub assets_pas2_key: [u8; 16],
     pub native_so_key: [u8; 16],
+    pub route_assets_key: [u8; 32],
 }
 
 #[cfg(test)]
@@ -422,6 +423,7 @@ pub fn parse_and_decompress_payload_with_fetch(
                 xop_pvm2,
                 assets_pas2_key: crypto::derive_assets_pas2_key(&payload.ikm, cert_fingerprint),
                 native_so_key: crypto::derive_native_so_key(&payload.ikm, cert_fingerprint),
+                route_assets_key: crypto::derive_route_assets_key(&payload.ikm, cert_fingerprint),
             })
         }
         _ => Err(format!("不支持的版本: {}，当前支持 v5/v6/v7", version)),
@@ -430,7 +432,13 @@ pub fn parse_and_decompress_payload_with_fetch(
 
 /// Cache hits still need a fresh process-local interpreter. Decrypt the authenticated
 /// container, but only decompress the tiny PVM2 sidecar instead of every cached DEX.
-type RuntimeSidecars = (String, Option<(Vec<u8>, [u8; 16])>, [u8; 16], [u8; 16]);
+type RuntimeSidecars = (
+    String,
+    Option<(Vec<u8>, [u8; 16])>,
+    [u8; 16],
+    [u8; 16],
+    [u8; 32],
+);
 
 #[cfg(test)]
 pub fn parse_xop_pvm2_payload(bin_data: &[u8], cert_fingerprint: &[u8]) -> Result<RuntimeSidecars> {
@@ -465,6 +473,7 @@ pub fn parse_xop_pvm2_payload_with_fetch(
     let (_, xop_code) = parse_entries(&plaintext, dex_count, payload.compression_layers, false)?;
     let assets_key = crypto::derive_assets_pas2_key(&payload.ikm, cert_fingerprint);
     let native_so_key = crypto::derive_native_so_key(&payload.ikm, cert_fingerprint);
+    let route_assets_key = crypto::derive_route_assets_key(&payload.ikm, cert_fingerprint);
     Ok((
         payload.expected_signature,
         xop_code.map(|code| {
@@ -475,6 +484,7 @@ pub fn parse_xop_pvm2_payload_with_fetch(
         }),
         assets_key,
         native_so_key,
+        route_assets_key,
     ))
 }
 
@@ -735,7 +745,7 @@ mod tests {
         assert_eq!(code, b"code-bin");
         assert_eq!(key, crypto::derive_xop_pvm2_key(ikm, signature.as_bytes()));
 
-        let (expected, sidecar, assets_key, native_so_key) =
+        let (expected, sidecar, assets_key, native_so_key, route_assets_key) =
             parse_xop_pvm2_payload(&bin, signature.as_bytes()).unwrap();
         assert_eq!(expected, signature);
         assert_eq!(sidecar.unwrap().0, b"code-bin");
@@ -746,6 +756,10 @@ mod tests {
         assert_eq!(
             native_so_key,
             crypto::derive_native_so_key(ikm, signature.as_bytes())
+        );
+        assert_eq!(
+            route_assets_key,
+            crypto::derive_route_assets_key(ikm, signature.as_bytes())
         );
         *bin.last_mut().unwrap() ^= 1;
         assert!(parse_and_decompress_payload(&bin, signature.as_bytes()).is_err());

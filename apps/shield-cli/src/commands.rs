@@ -72,6 +72,7 @@ pub(crate) fn run_protect(args: ResolvedProtectArgs) -> Result<()> {
         xop_true_vmp_prefixes: args.xop_true_vmp_prefix,
         pvm2_required_methods: args.pvm2_required_methods,
         native_vmp_evidence: args.native_vmp_evidence,
+        protect_route_assets: args.protect_route_assets,
         external_pvm2_dex_dir: None,
         external_pas2_assets_dir: None,
         deferred_pas2_asset_modules: Vec::new(),
@@ -442,6 +443,7 @@ pub fn run_protect_aab_with_control(
                 xop_true_vmp_prefixes: args.xop_true_vmp_prefix.clone(),
                 pvm2_required_methods: args.pvm2_required_methods.clone(),
                 native_vmp_evidence: args.native_vmp_evidence.clone(),
+                protect_route_assets: args.protect_route_assets,
                 external_pvm2_dex_dir: (!extra_module_dirs.is_empty())
                     .then_some(extra_modules_root.clone()),
                 external_pas2_assets_dir: has_external_assets.then_some(extra_modules_root.clone()),

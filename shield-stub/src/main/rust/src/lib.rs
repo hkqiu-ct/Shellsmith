@@ -4,6 +4,7 @@ mod bin_loader;
 mod crypto;
 mod native_so;
 mod root_environment;
+mod route_assets;
 mod xop_pvm2;
 
 use std::ffi::c_void;
@@ -117,6 +118,11 @@ pub unsafe extern "C" fn JNI_OnLoad(
             sig: "(Ljava/lang/String;[B)[B".into(),
             fn_ptr: f9 as *mut c_void,
         },
+        NativeMethod {
+            name: "z".into(),
+            sig: "([BI)[B".into(),
+            fn_ptr: f10 as *mut c_void,
+        },
     ];
     if env.register_native_methods(&class, &methods).is_err() {
         return jni::sys::JNI_ERR;
@@ -189,6 +195,25 @@ extern "C" fn f5(
         return std::ptr::null_mut();
     }
     unsafe { xop_pvm2::interpret(env.get_raw(), dex_index, method_index, args) }
+}
+
+extern "C" fn f10(mut env: JNIEnv, _class: JClass, blob: JByteArray, kind: jint) -> jobject {
+    let result = env
+        .convert_byte_array(&blob)
+        .map_err(|error| format!("read route asset failed: {error}"))
+        .and_then(|bytes| route_assets::decrypt(&bytes, kind as u8))
+        .and_then(|plain| {
+            env.byte_array_from_slice(&plain)
+                .map(|array| array.into_raw() as jobject)
+                .map_err(|error| format!("create route asset plaintext failed: {error}"))
+        });
+    match result {
+        Ok(array) => array,
+        Err(error) => {
+            throw_loader_error(&mut env, "java/io/IOException", "A11", error);
+            std::ptr::null_mut()
+        }
+    }
 }
 
 extern "C" fn f7(mut env: JNIEnv, _class: JClass, chunk: JByteArray) -> jobject {
@@ -529,7 +554,7 @@ extern "C" fn f6(mut env: JNIEnv, _class: JClass, ctx: JObject, dex_data: JByteA
             .map_err(|e| format!("提取 MSHD payload 失败: {e}"))?;
         let actual_signature =
             jni_get_actual_signature(&mut env, &ctx).map_err(|e| format!("e3: {e}"))?;
-        let (expected_signature, xop, assets_key, native_so_key) =
+        let (expected_signature, xop, assets_key, native_so_key, route_assets_key) =
             bin_loader::parse_xop_pvm2_payload_with_fetch(
                 payload,
                 actual_signature.as_bytes(),
@@ -545,6 +570,7 @@ extern "C" fn f6(mut env: JNIEnv, _class: JClass, ctx: JObject, dex_data: JByteA
         }
         assets_pas2::initialize(assets_key)?;
         native_so::initialize_wrap_key(native_so_key)?;
+        route_assets::initialize(route_assets_key)?;
         if let Some((code, mut key)) = xop {
             let result = xop_pvm2::initialize(&code, &mut key);
             xop_pvm2::wipe_key(&mut key);
@@ -664,6 +690,7 @@ fn decrypt_dex_files(
     }
     assets_pas2::initialize(decoded.assets_pas2_key)?;
     native_so::initialize_wrap_key(decoded.native_so_key)?;
+    route_assets::initialize(decoded.route_assets_key)?;
     Ok(decoded)
 }
 

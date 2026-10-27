@@ -1,6 +1,6 @@
 # 路由 assets 保护设计
 
-本文描述 `arouter_routes.txt` 与 `therouter_registry.txt` 的加密方案。它是下一主题版本的候选实现，不在 1.10.0 的 CI/发布收口批次中默认启用。
+本文描述 `arouter_routes.txt` 与 `therouter_registry.txt` 的加密方案。当前已实现为 `--protect-route-assets` 显式选项：默认关闭，启用后产物只写 `.rtap`，由配套壳运行时在内存中解密。默认开启还需单独评估旧壳兼容、API 19 和 AAB 分发矩阵。
 
 ## 1. 当前问题
 

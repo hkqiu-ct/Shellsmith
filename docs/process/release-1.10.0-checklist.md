@@ -14,6 +14,7 @@
 
 - [ ] TheRouter 编译期注册兼容已合入，并通过 `check-therouter-compat.py` 三态检查。
 - [ ] TheRouter 真实多模块样本完成一次页面跳转/服务注入设备验证。
+- [ ] 启用 `--protect-route-assets` 的产物完成一次 ARouter/TheRouter 页面跳转和设备启动验证。
 - [ ] 发布流程已改为手动触发，普通 PR 合并不再产生 Release。
 - [ ] Dependabot 与 `cargo-deny` 已接入，首个扫描结果有处理记录。
 - [ ] BYOS 威胁模型与边界文档已合入。
@@ -34,7 +35,7 @@
 - [ ] `make test-fusion`
 - [ ] `make build-stub build-byos build-byos-play`
 - [ ] `bash tests/scripts/run-protect-e2e.sh`
-- [ ] `python3 tests/scripts/check-therouter-compat.py --cli target/release/shield`
+- [ ] `python3 tests/scripts/check-therouter-compat.py --cli target/release/shield`（脚本已启用 `--protect-route-assets`，断言只存在 `.rtap`、不存在明文 `.txt`）
 - [ ] `bash scripts/check-release-ready.sh`
 - [ ] `make audit-stub-dex`
 

@@ -232,6 +232,7 @@ pub(crate) async fn execute_protect_apk(
                 .native_vmp_evidence
                 .map(PathBuf::from)
                 .map(strip_unc_prefix),
+            protect_route_assets: false,
             external_pvm2_dex_dir: None,
             external_pas2_assets_dir: None,
             deferred_pas2_asset_modules: Vec::new(),

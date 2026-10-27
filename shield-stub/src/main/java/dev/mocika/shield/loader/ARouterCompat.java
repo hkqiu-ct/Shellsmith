@@ -21,6 +21,7 @@ public class ARouterCompat {
     private static final String TAG = "rx";
     private static final String AROUTER_ROUTES_PACKAGE = "com.alibaba.android.arouter.routes.";
     private static final String ROUTE_LIST_ASSET = "arouter_routes.txt";
+    private static final String ROUTE_LIST_RTAP = "arouter_routes.rtap";
     private static final String CACHE_NAME = "SP_AROUTER_CACHE";
     private static final String CACHE_ROUTE_MAP = "ROUTER_MAP";
     private static final String CACHE_VERSION_NAME = "LAST_VERSION_NAME";
@@ -89,11 +90,17 @@ public class ARouterCompat {
 
     private static Set<String> readRouteList(Context context) {
         List<String> lines = new ArrayList<>();
-        try (InputStream is = context.getAssets().open(ROUTE_LIST_ASSET);
-             BufferedReader reader = new BufferedReader(new InputStreamReader(is, "UTF-8"))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                lines.add(line);
+        try {
+            try (InputStream is = context.getAssets().open(ROUTE_LIST_RTAP)) {
+                lines = splitLines(Ld.z(readAll(is), 1));
+            } catch (java.io.FileNotFoundException encryptedAbsent) {
+                try (InputStream is = context.getAssets().open(ROUTE_LIST_ASSET);
+                     BufferedReader reader = new BufferedReader(new InputStreamReader(is, "UTF-8"))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        lines.add(line);
+                    }
+                }
             }
         } catch (java.io.FileNotFoundException e) {
             // 文件不存在：宿主未使用 ARouter 或已通过 arouter-register plugin 编译期注入，属正常情况
@@ -101,6 +108,24 @@ public class ARouterCompat {
             Log.w(TAG, "A05", e);
         }
         return filterRouteClassNames(lines);
+    }
+
+    private static byte[] readAll(InputStream input) throws java.io.IOException {
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
+    }
+
+    private static List<String> splitLines(byte[] plain) throws java.io.UnsupportedEncodingException {
+        List<String> result = new ArrayList<>();
+        for (String line : new String(plain, "UTF-8").split("\\r?\\n")) {
+            if (!line.isEmpty()) result.add(line);
+        }
+        return result;
     }
 
     static Set<String> filterRouteClassNames(Iterable<String> lines) {

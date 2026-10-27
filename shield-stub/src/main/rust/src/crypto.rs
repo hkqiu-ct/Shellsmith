@@ -47,6 +47,14 @@ pub fn derive_native_so_key(ikm: &[u8], cert_fingerprint: &[u8]) -> [u8; 16] {
     okm
 }
 
+pub fn derive_route_assets_key(ikm: &[u8], cert_fingerprint: &[u8]) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(Some(cert_fingerprint), ikm);
+    let mut okm = [0u8; 32];
+    hk.expand(b"mocika-shield/route-assets/v1", &mut okm)
+        .expect("HKDF expand length is fixed at 32");
+    okm
+}
+
 pub fn decrypt(ciphertext: &[u8], key: &[u8; 32], nonce: &[u8; 12]) -> Result<Vec<u8>, String> {
     decrypt_with_aad(ciphertext, key, nonce, &[])
 }

@@ -230,6 +230,9 @@ pub struct ProtectAabArgs {
     /// Native 证据清单（UTF-8）：模块/lib/ABI/库名.so<TAB>SDK schema 2 报告路径。
     #[arg(long, value_name = "FILE")]
     pub native_vmp_evidence: Option<PathBuf>,
+    /// 加密 ARouter/TheRouter 路由索引 assets；需要配套壳运行时支持。
+    #[arg(long)]
+    pub protect_route_assets: bool,
     /// `--engine xop` 时使用的 Xop shell-files 目录。
     #[arg(long, value_name = "DIR")]
     pub xop_shell_dir: Option<PathBuf>,
@@ -396,6 +399,9 @@ pub(crate) struct ProtectArgs {
     /// Native 证据清单（UTF-8）：模块/lib/ABI/库名.so<TAB>SDK schema 2 报告路径。
     #[arg(long, value_name = "FILE")]
     pub native_vmp_evidence: Option<PathBuf>,
+    /// 加密 ARouter/TheRouter 路由索引 assets；需要配套壳运行时支持。
+    #[arg(long)]
+    pub protect_route_assets: bool,
     /// 每行输出一个 JSON 事件，兼容原有 --json-progress 参数。
     #[arg(long, alias = "json-progress")]
     pub json: bool,
