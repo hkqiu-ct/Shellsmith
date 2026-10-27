@@ -60,7 +60,9 @@ Pull Request 合并前必须通过以下 CI 检查：
 
 - `CI 通过`（汇总门禁）
 
-`CI 通过` 会汇总快速检查、完整代码质量、融合协议、iOS 归档、TheRouter 兼容以及已触发的 Android/Linux/Windows/发布前检查。普通 PR 至少执行单元测试、静态检查和 TheRouter 兼容；`next` 分支和 `next -> main` 发布 PR 还会执行 Android 壳构建、Linux Tauri 打包、Windows Android 4.4 资源构建和发布前检查。`skipped` 表示该检查在当前事件下未触发，不阻塞普通 PR；`failure` 或 `cancelled` 会阻塞合并。
+`CI 通过` 会汇总快速检查、完整代码质量、融合协议、iOS 归档以及已触发的 Android/Linux/Windows/发布前检查。普通 PR 至少执行单元测试和静态检查；`next` 分支和 `next -> main` 发布 PR 还会执行 Android 壳构建、TheRouter 兼容回归、Linux Tauri 打包、Windows Android 4.4 资源构建和发布前检查。`skipped` 表示该检查在当前事件下未触发，不阻塞普通 PR；`failure` 或 `cancelled` 会阻塞合并。
+
+> 仓库设置需要把 `CI 通过` 配置为 `main` 和 `next` 的必需状态检查。当前远程仓库实际未启用分支保护，启用前该门禁只提供信号，不能阻止直接推送或绕过。
 
 日常开发流程：
 
