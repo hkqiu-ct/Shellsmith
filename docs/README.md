@@ -36,7 +36,7 @@ Shellsmith 是 Android 与 iOS 双平台应用加固工具。Android 流程加�
 | 规划关键方法虚拟化、覆盖核验与运行时保护升级 | [design/android-code-protection-upgrade.md](design/android-code-protection-upgrade.md) |
 | 接入和维护 iOS 加固 | [design/ios-hardening.md](design/ios-hardening.md)、[实施计划](superpowers/plans/2026-09-24-ios-hardening-integration.md) |
 | 了解 Native 库打包、`extractNativeLibs` 与 16 KB 兼容设计 | [design/native-library-packaging.md](design/native-library-packaging.md) |
-| 实现或部署 BYOS 密钥服务端 | [design/byos-key-server.md](design/byos-key-server.md)、[design/byos-key-server-reference.md](design/byos-key-server-reference.md) |
+| 实现或部署 BYOS 密钥服务端 | [design/byos-key-server.md](design/byos-key-server.md)、[design/byos-key-server-reference.md](design/byos-key-server-reference.md)、[design/byos-key-model.md](design/byos-key-model.md) |
 | 接入源码级 LLVM Native VMP | [../native-vmp/README.md](../native-vmp/README.md) |
 | 了解旧 SDK 附带不支持 ABI 时的确认与排除策略 | [design/unsupported-abi.md](design/unsupported-abi.md) |
 | 了解 Native 库名去品牌化与按任务别名方案 | [design/native-library-alias.md](design/native-library-alias.md) |

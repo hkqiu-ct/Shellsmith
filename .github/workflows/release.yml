@@ -1,32 +1,71 @@
 name: Release
 
 on:
-  workflow_run:
-    workflows:
-      - CI
-    types:
-      - completed
-    branches:
-      - main
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
-        description: "发布版本号，例如 1.2.3"
+        description: "发布版本号，例如 1.10.0；必须与 package.json 一致"
         required: true
         type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   ANDROID_NDK_VERSION: 29.0.14206865
   ANDROID_NDK_API19_VERSION: 25.2.9519653
 
 jobs:
+  verify:
+    name: 发布门禁
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: 确认发布提交来自 main
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo "发布 tag 必须指向 main 上的提交"
+            exit 1
+          }
+
+      - name: 检查版本号与工作区
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(python3 -c 'import json; print(json.load(open("apps/shield-gui/package.json", encoding="utf-8"))["version"])')"
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${{ inputs.version }}"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
+          test "$version" = "$package_version" || {
+            echo "发布版本 $version 与 package.json $package_version 不一致；先运行 scripts/bump-version.sh"
+            exit 1
+          }
+          git diff --check
+
   prepare:
     name: 准备草稿 Release
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    needs: verify
     runs-on: ubuntu-24.04
+    environment: release
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -35,7 +74,7 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
 
       - name: 创建草稿
         id: version
@@ -47,13 +86,14 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "缺少更新签名密钥"; exit 1; }
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            version="$REQUESTED_VERSION"
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            version="${GITHUB_REF_NAME#v}"
           else
-            version="$(python3 -c 'import json; print(json.load(open("apps/shield-gui/package.json", encoding="utf-8"))["version"])')"
-            version="${version}-build.${{ github.event.workflow_run.run_number }}"
+            version="$REQUESTED_VERSION"
           fi
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
+          package_version="$(python3 -c 'import json; print(json.load(open("apps/shield-gui/package.json", encoding="utf-8"))["version"])')"
+          test "$version" = "$package_version" || { echo "发布版本与 package.json 不一致"; exit 1; }
           tag="v${version}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -71,7 +111,6 @@ jobs:
 
   linux-tauri:
     name: Linux Tauri 发布包
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     needs: prepare
     runs-on: ubuntu-22.04
     env:
@@ -81,7 +120,6 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
 
@@ -272,7 +310,6 @@ jobs:
 
   macos-tauri:
     name: macOS Tauri 发布包
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     needs: prepare
     runs-on: macos-15
     env:
@@ -282,7 +319,6 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
 
 
@@ -370,7 +406,6 @@ jobs:
 
   windows:
     name: Windows 发布包
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     needs: prepare
     runs-on: windows-2025
     env:
@@ -380,7 +415,6 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
 
 
@@ -469,7 +503,6 @@ jobs:
 
   publish:
     name: 发布到 GitHub Releases
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     needs:
       - prepare
@@ -484,7 +517,6 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
       - name: 解析发布类型

@@ -5,7 +5,9 @@ on:
     branches:
       - main
       - master
+      - next
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -85,6 +87,8 @@ jobs:
 
   fusion-contract:
     name: 融合协议和单壳契约
+    needs: changes
+    if: needs.changes.outputs.run_checks == 'true'
     runs-on: ubuntu-24.04
 
     steps:
@@ -115,6 +119,8 @@ jobs:
 
   ios-core:
     name: iOS 核心与 Xcode ${{ matrix.xcode }} 归档
+    needs: changes
+    if: needs.changes.outputs.run_checks == 'true'
     runs-on: macos-15
     strategy:
       matrix:
@@ -151,6 +157,8 @@ jobs:
 
   full-quality:
     name: 完整代码质量检查
+    needs: changes
+    if: needs.changes.outputs.run_checks == 'true'
     runs-on: ubuntu-24.04
 
     steps:
@@ -189,9 +197,105 @@ jobs:
           npm run typecheck
           npm run build
 
+  therouter-compat:
+    name: TheRouter 注册兼容
+    needs: changes
+    if: needs.changes.outputs.run_checks == 'true'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 配置 Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: 配置 Android 命令行工具
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: 安装 Android 构建工具
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: 构建 CLI
+        run: cargo build -p shield-cli --release
+
+      - name: 验证 TheRouter 编译期注册、索引回退与未知模式
+        run: python3 tests/scripts/check-therouter-compat.py --cli target/release/shield
+
+  dependency-audit:
+    name: 依赖漏洞扫描
+    needs: changes
+    if: needs.changes.outputs.run_checks == 'true'
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 检查 Rust 依赖公告
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
+          arguments: --all-features
+
+  ci-gate:
+    name: CI 通过
+    needs:
+      - quick-checks
+      - fusion-contract
+      - ios-core
+      - full-quality
+      - therouter-compat
+      - stub
+      - linux-gui-bundle
+      - windows-api19-resources
+      - release-readiness
+    if: always()
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 汇总必需检查
+        shell: bash
+        run: |
+          set -euo pipefail
+          results=(
+            "${{ needs.quick-checks.result }}"
+            "${{ needs.fusion-contract.result }}"
+            "${{ needs.ios-core.result }}"
+            "${{ needs.full-quality.result }}"
+            "${{ needs.therouter-compat.result }}"
+            "${{ needs.stub.result }}"
+            "${{ needs.linux-gui-bundle.result }}"
+            "${{ needs.windows-api19-resources.result }}"
+            "${{ needs.release-readiness.result }}"
+          )
+          for result in "${results[@]}"; do
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              echo "必需检查失败：$result"
+              exit 1
+            fi
+          done
+          echo "所有已执行的必需检查均通过（skipped 视为未触发，不阻塞普通 PR）。"
+
   linux-gui-bundle:
     name: Linux Tauri 打包冒烟检查
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: >-
+      needs.changes.outputs.run_checks == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/next') ||
+       (github.event_name == 'pull_request' && github.base_ref == 'main'))
     runs-on: ubuntu-22.04
 
     steps:
@@ -277,7 +381,12 @@ jobs:
 
   stub:
     name: Android 壳构建
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: >-
+      needs.changes.outputs.run_checks == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/next') ||
+       (github.event_name == 'pull_request' && github.base_ref == 'main'))
     runs-on: ubuntu-24.04
 
     steps:
@@ -329,7 +438,12 @@ jobs:
 
   windows-api19-resources:
     name: Windows Android 4.4 资源构建
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: >-
+      needs.changes.outputs.run_checks == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/next') ||
+       (github.event_name == 'pull_request' && github.base_ref == 'main'))
     runs-on: windows-2025
 
     steps:
@@ -378,7 +492,12 @@ jobs:
 
   release-readiness:
     name: 发布前检查
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: >-
+      needs.changes.outputs.run_checks == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/next') ||
+       (github.event_name == 'pull_request' && github.base_ref == 'main'))
     runs-on: ubuntu-24.04
 
     steps:
