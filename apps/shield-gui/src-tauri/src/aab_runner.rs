@@ -143,6 +143,7 @@ pub(crate) async fn execute_protect_aab(
                 .native_vmp_evidence
                 .map(PathBuf::from)
                 .map(strip_unc_prefix),
+            protect_route_assets: false,
             xop_shell_dir: None,
             xop_profile: XopProfileArg::Industry,
             xop_no_protect_so: false,
