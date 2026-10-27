@@ -14,7 +14,7 @@
 
 - [ ] TheRouter 编译期注册兼容已合入，并通过 `check-therouter-compat.py` 三态检查。
 - [ ] TheRouter 真实多模块样本完成一次页面跳转/服务注入设备验证。
-- [ ] 发布流程已改为 tag/手动触发，普通 PR 合并不再产生 Release。
+- [ ] 发布流程已改为手动触发，普通 PR 合并不再产生 Release。
 - [ ] Dependabot 与 `cargo-deny` 已接入，首个扫描结果有处理记录。
 - [ ] BYOS 威胁模型与边界文档已合入。
 - [ ] 计划进入本版本的 iOS/路由 assets 等主题已完成对应验收；未完成项移出本版本，不阻塞补丁修复。
@@ -62,8 +62,8 @@
 - [ ] 更新 `.github/release-notes/versions/1.10.0.md`，按实际合并内容补齐 PR 编号。
 - [ ] 确认 `main` 上的发布 PR 已通过完整 CI（包括 `stub`、`linux-gui-bundle`、`windows-api19-resources`、`release-readiness`）。
 - [ ] 合并发布 PR 到 `main`。
-- [ ] 创建并推送 tag：`git tag v1.10.0 && git push origin v1.10.0`。
-- [ ] 在 GitHub Actions 中确认 `Release` 工作流通过 `release` environment 审批。
+- [ ] 在 GitHub Actions 手动运行 `Release`，输入 `1.10.0`。
+- [ ] 在 GitHub Actions 中确认 `Release` 工作流通过 `release` environment 审批，并由工作流创建 `v1.10.0` tag。
 - [ ] 验证 Release 产物、更新清单和 `latest.json` 可下载且签名有效。
 - [ ] 发布后删除已合并的临时分支，保留 `next` 或按下一版本重建。
 

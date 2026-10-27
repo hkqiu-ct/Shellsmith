@@ -69,8 +69,9 @@ Pull Request 合并前必须通过以下 CI 检查：
 3. 等待 `CI 通过` 汇总门禁通过，并解决未完成的评审对话。
 4. 合并到 `next`，随后删除临时分支；`next` 上的合并提交会再跑一次组合 CI。
 5. 全部内容收口后，创建唯一的 `next -> main` 发布 PR，跑完整 CI（Android 壳、Linux 打包、Windows 4.4、发布前检查）。
-6. 发布 PR 合入 `main` 后，运行 `scripts/bump-version.sh` 同步版本，创建并推送 `vX.Y.Z` tag。
-7. tag 推送触发 `Release` 工作流；普通 PR 合并只跑 CI，不触发 Release。
+6. 发布 PR 合入 `main` 后，运行 `scripts/bump-version.sh` 同步版本并完成版本提交。
+7. 在 GitHub Actions 手动运行 `Release` 工作流并输入版本号；普通 PR 合并和 `next` 合并只跑 CI，不触发 Release。
+8. Release 工作流成功后自动创建 `vX.Y.Z` tag 并公开 Release；不要提前手动推送 tag。
 
 管理员绕过只用于保护规则配置错误、CI 基础设施不可用或紧急安全修复。绕过后必须补建对应 Pull Request 或维护记录，不作为日常直接推送 `main` 的方式。
 
@@ -142,12 +143,13 @@ git add -A
 git commit -m "chore: 发布 1.10.0"
 git push -u origin release/1.10.0
 
-# 4. PR 通过完整 CI 并合并后，在最新的 main 上打 tag
+# 4. PR 通过完整 CI 并合并后，在 main 上手动触发 Release
 git switch main
 git pull --ff-only origin main
-git tag v1.10.0
-git push origin v1.10.0
+gh workflow run release.yml --ref main -f version=1.10.0
 ```
+
+Release 工作流会校验版本号与 `package.json` 一致，然后创建 `v1.10.0` tag 并公开 Release。仅推送 tag 不会触发当前工作流。
 
 发布前确认 `.github/release-notes/versions/1.10.0.md` 已按实际合并内容更新。`Release` 工作流会在 `release` environment 等待审批，然后构建 Linux、macOS、Windows 和 Android runtime 资源，并生成 `latest.json`。
 
