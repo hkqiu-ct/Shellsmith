@@ -506,5 +506,8 @@ jobs:
       - name: 构建 shield-stub
         run: make build-stub build-byos build-byos-play
 
+      - name: 恢复受版本控制的打包器 JAR
+        run: git checkout -- tools/xop-pvm2-packer.jar
+
       - name: 运行发布前检查
         run: bash scripts/check-release-ready.sh
