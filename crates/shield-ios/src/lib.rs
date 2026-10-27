@@ -90,6 +90,10 @@ pub struct IosRaspConfig {
     pub watcher_mail: Option<String>,
     #[serde(default = "default_critical_threats")]
     pub critical: Vec<String>,
+    /// Opt-in: terminate the process when a threat in `critical` is detected.
+    /// Default false because terminating a production app is a product policy.
+    #[serde(default)]
+    pub block_on_critical: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -695,6 +699,7 @@ mod tests {
                 enabled: true,
                 watcher_mail: Some("security@example.com".into()),
                 critical: default_critical_threats(),
+                block_on_critical: false,
             }),
         };
         assert!(config.validate().is_ok());
@@ -728,6 +733,7 @@ mod tests {
                 enabled: true,
                 watcher_mail: Some("  ".into()),
                 critical: default_critical_threats(),
+                block_on_critical: false,
             }),
         };
         assert!(config.validate().is_ok());

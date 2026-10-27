@@ -101,6 +101,7 @@ public enum ShellsmithRuntime {
     private static let lock = NSLock()
     private static var state: State = .idle
     private static var criticalThreats = Set<String>()
+    private static var blockOnCritical = false
     private static var handler: ((ShellsmithThreatEvent) -> Void)?
     private static var events: [String: ShellsmithThreatEvent] = [:]
 
@@ -110,6 +111,7 @@ public enum ShellsmithRuntime {
         watcherMail: String?,
         isProd: Bool,
         critical: [String],
+        blockOnCritical: Bool = false,
         onThreat: ((ShellsmithThreatEvent) -> Void)? = nil
     ) {
         var shouldStart = false
@@ -119,6 +121,7 @@ public enum ShellsmithRuntime {
         case .idle:
             state = .starting
             criticalThreats = Set(critical)
+            self.blockOnCritical = blockOnCritical
             handler = onThreat
             shouldStart = true
         case .starting, .started:
@@ -181,9 +184,15 @@ public enum ShellsmithRuntime {
         let event = ShellsmithThreatEvent(name: name, severity: severity)
         let isNew = events.updateValue(event, forKey: name) == nil
         let callback = handler
+        let shouldBlock = blockOnCritical && severity == .critical
         lock.unlock()
         guard isNew else { return }
         deliver(event, to: callback)
+        if shouldBlock {
+            DispatchQueue.main.async {
+                fatalError("Shellsmith security policy blocked critical threat: \(name)")
+            }
+        }
     }
 
     private static func deliver(
@@ -260,9 +269,10 @@ pub(crate) fn protection_source(config: &ShellsmithIosConfig) -> String {
         .as_deref()
         .map(|value| format!("\"{}\"", swift_escape(value)))
         .unwrap_or_else(|| "nil".to_string());
+    let block_critical = rasp.map(|item| item.block_on_critical).unwrap_or(false);
     let start_body = if config.protection.profile.uses_rasp() {
         format!(
-            "ShellsmithRuntime.start(\n            bundleIds: [{bundle_ids}],\n            teamId: \"{team}\",\n            watcherMail: {watcher},\n            isProd: {is_prod},\n            critical: [{critical}],\n            onThreat: onThreat\n        )",
+            "ShellsmithRuntime.start(\n            bundleIds: [{bundle_ids}],\n            teamId: \"{team}\",\n            watcherMail: {watcher},\n            isProd: {is_prod},\n            critical: [{critical}],\n            blockOnCritical: {block_critical},\n            onThreat: onThreat\n        )",
             team = swift_escape(&config.project.team_id),
             is_prod = if config.protection.is_prod { "true" } else { "false" },
         )
@@ -486,7 +496,7 @@ fn swift_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IosProjectConfig, IosProtectionConfig, IosProtectionProfile};
+    use crate::{IosProjectConfig, IosProtectionConfig, IosProtectionProfile, IosRaspConfig};
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -542,6 +552,43 @@ mod tests {
         assert!(source.contains("shouldRestrictSensitiveOperations"));
         let startup = source.find("Talsec.start").unwrap();
         assert!(source[..startup].rfind("lock.unlock()").is_some());
+    }
+
+    #[test]
+    fn critical_blocking_is_explicit_and_opt_in() {
+        let source = runtime_source(true);
+        assert!(source.contains("blockOnCritical: Bool = false"));
+        assert!(source.contains("fatalError(\"Shellsmith security policy blocked critical threat"));
+        assert!(source.contains("shouldBlock"));
+    }
+
+    #[test]
+    fn protection_source_passes_opt_in_blocking_flag() {
+        let config = ShellsmithIosConfig {
+            project: IosProjectConfig {
+                path: PathBuf::from("App.xcodeproj"),
+                scheme: "App".into(),
+                configuration: "Release".into(),
+                team_id: "ABCDE12345".into(),
+                bundle_ids: vec!["com.example.app".into()],
+                entrypoint: None,
+            },
+            protection: IosProtectionConfig {
+                profile: IosProtectionProfile::Balanced,
+                ..IosProtectionConfig::default()
+            },
+            confidential: None,
+            rasp: Some(IosRaspConfig {
+                provider: "freerasp".into(),
+                enabled: true,
+                watcher_mail: None,
+                critical: vec!["signature".into()],
+                block_on_critical: true,
+            }),
+        };
+        let source = protection_source(&config);
+        assert!(source.contains("blockOnCritical: true"));
+        assert!(source.contains("critical: [\"signature\"]"));
     }
 
     #[test]

@@ -27,3 +27,6 @@ enabled = true
 # watcher_mail is optional; omit it when no Talsec watcher email is desired.
 # watcher_mail = "security@example.com"
 critical = ["signature", "jailbreak", "debugger", "runtimeManipulation"]
+# Opt-in: terminate the process when a listed critical threat is detected.
+# Default false because terminating a production app is a product policy.
+# block_on_critical = false
