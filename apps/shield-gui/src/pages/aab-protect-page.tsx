@@ -69,6 +69,7 @@ export function AabProtectPage({
   const [runtimeUi, setRuntimeUi] = useState(defaultRuntimeUi);
   const [profile, setProfile] = useState<"balanced" | "strict">("strict");
   const [pvm2RequiredMethods, setPvm2RequiredMethods] = useState("");
+  const [protectRouteAssets, setProtectRouteAssets] = useState(false);
   const [nativeVmpEvidence, setNativeVmpEvidence] = useState("");
   const [prefixesText, setPrefixesText] = useState("");
   const [currentStep, setCurrentStep] = useState("");
@@ -147,6 +148,7 @@ export function AabProtectPage({
     setPvm2Failure(null);
     setPrefixesText("");
     setPvm2RequiredMethods("");
+    setProtectRouteAssets(false);
     setCurrentStep("");
     setCurrentDetail("");
     setStartedAt(null);
@@ -222,6 +224,7 @@ export function AabProtectPage({
         aiResistance: profile === "strict" ? "high" : "balanced",
         xopTrueVmpPrefixes: profile === "strict" ? prefixes : [],
         pvm2RequiredMethods: profile === "strict" ? pvm2RequiredMethods.trim() || null : null,
+        protectRouteAssets,
         nativeVmpEvidence: nativeVmpEvidence.trim() || null,
       });
       setFinishedAt(Date.now());
@@ -249,6 +252,7 @@ export function AabProtectPage({
     setWarning("");
     setPrefixesText("");
     setPvm2RequiredMethods("");
+    setProtectRouteAssets(false);
     setCurrentStep("");
     setStartedAt(null);
     setFinishedAt(null);
@@ -344,6 +348,7 @@ export function AabProtectPage({
                     <TextInput value={pvm2RequiredMethods} disabled={locked} onChange={(event) => setPvm2RequiredMethods(event.target.value)} />
                     <AppButton className="mt-2 w-full" variant="secondary" disabled={locked} onClick={async () => { const path = await openFileDialog("TXT", ["txt", "tsv"]); if (path) setPvm2RequiredMethods(path); }}>{t(locale, "pvm2ChooseMethods")}</AppButton>
                   </Field>}
+                  <CheckRow checked={protectRouteAssets} disabled={locked} label={t(locale, "routeAssetsProtection")} hint={t(locale, "routeAssetsProtectionHint")} onChange={setProtectRouteAssets} />
                   <Field label={t(locale, "nativeVmpEvidence")} hint={t(locale, "nativeVmpEvidenceHint")}>
                     <TextInput aria-label={t(locale, "nativeVmpEvidence")} value={nativeVmpEvidence} disabled={locked} onChange={(event) => setNativeVmpEvidence(event.target.value)} />
                     <AppButton className="mt-2 w-full" variant="secondary" disabled={locked} onClick={async () => { const path = await openFileDialog("TSV", ["txt", "tsv"]); if (path) setNativeVmpEvidence(path); }}>{t(locale, "nativeVmpChooseEvidence")}</AppButton>

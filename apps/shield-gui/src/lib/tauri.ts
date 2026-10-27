@@ -314,6 +314,7 @@ export type AabProtectRequest = {
   xopTrueVmpPrefixes: string[];
   pvm2RequiredMethods?: string | null;
   nativeVmpEvidence?: string | null;
+  protectRouteAssets?: boolean;
 };
 
 export type TaskKind = "protect" | "ios_protect" | "sign" | "update";
@@ -455,7 +456,7 @@ export const api = {
     invoke<ApkCheckResult>("check_apk", { path, runtimeMode, certificateId: certificateId ?? null }),
   checkAab: (path: string) => invoke<AabInspection>("check_aab", { path }),
   protectAab: (request: AabProtectRequest) => invoke<void>("protect_aab", { request }),
-  protectApk: (taskId: string, input: string, output: string, runtimeMode: "standard" | "android_api19", environmentPolicy: "compatible" | "strict", protectionProfile: "compat" | "balanced" | "strict", aiResistance: "off" | "balanced" | "high", xopPvm2PackerPath: string | null, xopTrueVmpPrefixes: string[], signedOutput?: string | null, certificateId?: string | null, excludedAbis: string[] = [], sharing: SharingChoice | null = null, runtimeUi: RuntimeUiProtection = defaultRuntimeUi, pvm2RequiredMethods: string | null = null, nativeVmpEvidence: string | null = null, byosProfileId: string | null = null) =>
+  protectApk: (taskId: string, input: string, output: string, runtimeMode: "standard" | "android_api19", environmentPolicy: "compatible" | "strict", protectionProfile: "compat" | "balanced" | "strict", aiResistance: "off" | "balanced" | "high", xopPvm2PackerPath: string | null, xopTrueVmpPrefixes: string[], signedOutput?: string | null, certificateId?: string | null, excludedAbis: string[] = [], sharing: SharingChoice | null = null, runtimeUi: RuntimeUiProtection = defaultRuntimeUi, pvm2RequiredMethods: string | null = null, nativeVmpEvidence: string | null = null, byosProfileId: string | null = null, protectRouteAssets: boolean = false) =>
     invoke<void>("protect_apk", {
       request: {
         taskId,
@@ -473,6 +474,7 @@ export const api = {
         xopTrueVmpPrefixes,
         pvm2RequiredMethods,
         nativeVmpEvidence,
+        protectRouteAssets,
         byosProfileId,
         excludedAbis,
         certificateId: certificateId ?? null,

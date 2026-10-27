@@ -31,6 +31,7 @@ export function ProtectConfigurationPanel({
   usingRecommendedProtection,
   xopPvm2PackerPath,
   pvm2RequiredMethods, onPvm2RequiredMethodsChange,
+  protectRouteAssets, onProtectRouteAssetsChange,
   nativeVmpEvidence, onNativeVmpEvidenceChange,
   xopTrueVmpPrefixesText,
   xopTrueVmpPrefixes,
@@ -77,6 +78,8 @@ export function ProtectConfigurationPanel({
   onNativeVmpEvidenceChange: (value: string) => void;
   pvm2RequiredMethods: string;
   onPvm2RequiredMethodsChange: (value: string) => void;
+  protectRouteAssets: boolean;
+  onProtectRouteAssetsChange: (value: boolean) => void;
   xopTrueVmpPrefixesText: string;
   xopTrueVmpPrefixes: string[];
   xopPvm2BuiltInAvailable: boolean;
@@ -173,6 +176,19 @@ export function ProtectConfigurationPanel({
                 <TextInput id="pvm2-required-methods" className="mt-2" value={pvm2RequiredMethods} disabled={disabled} onChange={(event) => onPvm2RequiredMethodsChange(event.target.value)} />
                 <AppButton className="mt-2 w-full" variant="secondary" disabled={disabled} onClick={async () => { const path = await openFileDialog("TXT", ["txt", "tsv"]); if (path) onPvm2RequiredMethodsChange(path); }}><FolderOpen className="h-4 w-4" />{t(locale, "pvm2ChooseMethods")}</AppButton>
                 <p className="mt-2 text-xs leading-5 text-muted-foreground">{t(locale, "pvm2RequiredMethodsHint")}</p>
+                <label className="mt-4 flex items-start gap-2 text-xs leading-5">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+                    checked={protectRouteAssets}
+                    disabled={disabled}
+                    onChange={(event) => onProtectRouteAssetsChange(event.target.checked)}
+                  />
+                  <span>
+                    <span className="font-medium">{t(locale, "routeAssetsProtection")}</span>
+                    <span className="mt-1 block text-muted-foreground">{t(locale, "routeAssetsProtectionHint")}</span>
+                  </span>
+                </label>
                 {invalidPvmPrefix && <p className="mt-2 text-xs leading-5 text-warning">{t(locale, "xopPvm2PrefixInvalid")}</p>}
                 {!xopPvm2JavaReady && (xopTrueVmpPrefixes.length > 0 || Boolean(pvm2RequiredMethods.trim())) && <p className="mt-2 text-xs leading-5 text-warning">{tf(locale, "xopPvm2JavaRequired", { min: xopPvm2MinJavaMajor })}</p>}
                 {runtimeMode === "android_api19" && <p className="mt-2 text-xs leading-5 text-warning">{t(locale, "xopPvm2Api19Unavailable")}</p>}
