@@ -151,6 +151,8 @@ gh workflow run release.yml --ref main -f version=1.10.0
 
 Release 工作流会校验版本号与 `package.json` 一致，然后创建 `v1.10.0` tag 并公开 Release。仅推送 tag 不会触发当前工作流。
 
+批量开发期间如果 GitHub 仍因历史默认分支配置在 `next` 推送时创建空 Release 运行，可在 Actions 页面手动禁用 `Release` 工作流；正式发布前再启用。禁用不影响 CI。
+
 发布前确认 `.github/release-notes/versions/1.10.0.md` 已按实际合并内容更新。`Release` 工作流会在 `release` environment 等待审批，然后构建 Linux、macOS、Windows 和 Android runtime 资源，并生成 `latest.json`。
 
 普通 PR 合并、`next` 合并和文档提交只触发 CI，不会触发 Release。

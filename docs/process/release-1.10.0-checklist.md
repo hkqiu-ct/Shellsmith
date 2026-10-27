@@ -62,6 +62,7 @@
 - [ ] 更新 `.github/release-notes/versions/1.10.0.md`，按实际合并内容补齐 PR 编号。
 - [ ] 确认 `main` 上的发布 PR 已通过完整 CI（包括 `stub`、`linux-gui-bundle`、`windows-api19-resources`、`release-readiness`）。
 - [ ] 合并发布 PR 到 `main`。
+- [ ] 确认 GitHub Actions 中的 `Release` 工作流已启用（批量开发期间可手动禁用，避免 next 推送产生空运行）。
 - [ ] 在 GitHub Actions 手动运行 `Release`，输入 `1.10.0`。
 - [ ] 在 GitHub Actions 中确认 `Release` 工作流通过 `release` environment 审批，并由工作流创建 `v1.10.0` tag。
 - [ ] 验证 Release 产物、更新清单和 `latest.json` 可下载且签名有效。
