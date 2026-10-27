@@ -132,9 +132,6 @@ public enum ShellsmithRuntime {
         // Do not call third-party startup while holding our lock. Some RASP
         // implementations can report a finding synchronously during startup.
         if shouldStart {
-            // Register the handler before Talsec starts so synchronous startup
-            // findings are not lost. The handler is retained by the singleton.
-            SecurityThreatCenter.shared.threatHandler = ShellsmithThreatHandler.shared
             Talsec.start(config: TalsecConfig(
                 appBundleIds: bundleIds,
                 appTeamId: teamId,
@@ -224,13 +221,7 @@ public enum ShellsmithRuntime {
     }
 }
 
-public final class ShellsmithThreatHandler: NSObject, SecurityThreatHandler {
-    public static let shared = ShellsmithThreatHandler()
-
-    private override init() {
-        super.init()
-    }
-
+extension SecurityThreatCenter: SecurityThreatHandler {
     public func threatDetected(_ securityThreat: TalsecRuntime.SecurityThreat) {
         ShellsmithRuntime.receive(securityThreat)
     }
@@ -539,10 +530,7 @@ mod tests {
             assert!(source.contains(threat));
         }
         assert!(source.contains("SecurityThreatHandler"));
-        assert!(source.contains("ShellsmithThreatHandler"));
-        assert!(source.contains(
-            "SecurityThreatCenter.shared.threatHandler = ShellsmithThreatHandler.shared"
-        ));
+        assert!(source.contains("extension SecurityThreatCenter: SecurityThreatHandler"));
     }
 
     #[test]
@@ -554,10 +542,6 @@ mod tests {
         assert!(source.contains("shouldRestrictSensitiveOperations"));
         let startup = source.find("Talsec.start").unwrap();
         assert!(source[..startup].rfind("lock.unlock()").is_some());
-        let handler_registration = source
-            .find("SecurityThreatCenter.shared.threatHandler = ShellsmithThreatHandler.shared")
-            .unwrap();
-        assert!(handler_registration < startup);
     }
 
     #[test]
