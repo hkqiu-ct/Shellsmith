@@ -125,6 +125,8 @@ pub fn scan_therouter_registry(dex_dir: &Path) -> Result<TheRouterRegistry> {
 }
 
 /// 上游插件在唯一的静态布尔字段 asm 中写入注册标记；D8/R8 将其保存为 encoded_value。
+// 保持 Rust 1.77.2（API 19 兼容构建）可用，不使用 1.88+ 的 as_chunks。
+#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 fn has_therouter_asm_flag(data: &[u8]) -> Option<bool> {
     let strings = u32_le(data, 56) as usize;
     let string_offset = u32_le(data, 60) as usize;

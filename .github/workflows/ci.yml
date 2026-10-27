@@ -221,7 +221,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          set +o pipefail
           yes | sdkmanager --licenses >/dev/null
+          set -o pipefail
           sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: 构建 CLI
@@ -235,13 +237,13 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_checks == 'true'
     runs-on: ubuntu-24.04
-    continue-on-error: true
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
 
       - name: 检查 Rust 依赖公告
+        continue-on-error: true
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories
