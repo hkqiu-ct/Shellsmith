@@ -157,8 +157,6 @@ jobs:
 
   full-quality:
     name: 完整代码质量检查
-    needs: changes
-    if: needs.changes.outputs.run_checks == 'true'
     runs-on: ubuntu-24.04
 
     steps:
@@ -252,6 +250,7 @@ jobs:
   ci-gate:
     name: CI 通过
     needs:
+      - changes
       - quick-checks
       - fusion-contract
       - ios-core
@@ -270,6 +269,7 @@ jobs:
         run: |
           set -euo pipefail
           results=(
+            "${{ needs.changes.result }}"
             "${{ needs.quick-checks.result }}"
             "${{ needs.fusion-contract.result }}"
             "${{ needs.ios-core.result }}"

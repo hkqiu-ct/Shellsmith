@@ -58,9 +58,9 @@ GitHub 的 `main` 分支必须保持保护状态，正式代码统一通过临�
 
 Pull Request 合并前必须通过以下 CI 检查：
 
-- `基础快速检查`
+- `CI 通过`（汇总门禁）
 
-普通 PR 执行快速检查、融合协议、iOS 归档和完整代码质量检查；完整质量检查包含 CI 工具链上的 Clippy、Rust 测试及前端检查，避免只在合并后发现新工具链问题。Android 壳构建、Linux Tauri 打包冒烟、Windows Android 4.4 资源构建和发布前检查仍仅在手动触发 CI 时执行；版本发布由 Release 工作流完整构建三个平台。发布 PR 应等待全部已触发的检查通过。
+`CI 通过` 会汇总快速检查、完整代码质量、融合协议、iOS 归档、TheRouter 兼容以及已触发的 Android/Linux/Windows/发布前检查。普通 PR 至少执行单元测试、静态检查和 TheRouter 兼容；`next` 分支和 `next -> main` 发布 PR 还会执行 Android 壳构建、Linux Tauri 打包、Windows Android 4.4 资源构建和发布前检查。`skipped` 表示该检查在当前事件下未触发，不阻塞普通 PR；`failure` 或 `cancelled` 会阻塞合并。
 
 日常开发流程：
 

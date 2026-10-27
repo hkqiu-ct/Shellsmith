@@ -9,7 +9,9 @@ Shellsmith 的 iOS 流水线以用户拥有源码及签名权限的 `.xcodeproj`
 3. 使用 Apple 原生 `xcodebuild archive`、`-exportArchive`、Keychain 和 Provisioning Profile 完成构建签名。
 4. 验证 `codesign`、Team ID、Bundle ID、Entitlements、arm64、Privacy Manifest、TalsecRuntime dSYM 和选择性敏感字符串。
 
-运行时事件在 ShellsmithRuntime 内部去重，并统一异步投递到主线程；启动期间产生的威胁会保留，可通过 `observedThreats()` 在业务监听器注册后重放。第三方 RASP 的启动调用不会在 Shellsmith 锁内执行，避免同步回调造成启动死锁。
+运行时事件在 ShellsmithRuntime 内部去重，并统一异步投递到主线程；启动期间产生的威胁会保留，可通过 `observedThreats()` 在业务监听器注册后重放。Shellsmith 在调用 `Talsec.start` 之前先注册 `SecurityThreatCenter.shared.threatHandler`，避免启动期同步威胁丢失；第三方 RASP 的启动调用不会在 Shellsmith 锁内执行，避免同步回调造成启动死锁。
+
+检测到威胁不等于业务已经阻断。业务应在支付、密钥导出、管理操作等敏感流程前调用 `ShellsmithRuntime.shouldRestrictSensitiveOperations()`，或监听 `Notification.Name.shellsmithThreatDetected` 并执行自己的拒绝策略；Shellsmith 不擅自终止进程或封禁账号。
 
 Swift Confidential 属于局部静态保护，freeRASP 属于运行时应用自保护。组合后是分层的第三代方案；只有客户端 RASP 或 App Attest 客户端接口时不能称为第四代。`strict` 可以不配置服务端地址执行客户端加固；配置地址后才具备接入服务端证明闭环的条件，服务端仍需自行实现挑战、Apple 证明校验和重放防护。
 
