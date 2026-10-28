@@ -43,6 +43,22 @@ python3 scripts/evidence/recovery_benchmark.py \
   --command "python3 tests/scripts/check-pvm2-art.py --min-api 26 --output target/evidence/pvm2-art" \
   --output docs/evidence/artifacts/pvm2-art-benchmark.json
 
+# 单台 Android 设备安装/启动/PSS/日志/私有目录采样
+python3 scripts/evidence/device_acceptance.py \
+  --serial <serial> --apk <signed.apk> \
+  --package <package> --activity .MainActivity \
+  --output docs/evidence/artifacts/device-<serial>.json
+
+# BYOS 协议负面探测（需要测试 endpoint）
+python3 scripts/evidence/byos_probe.py \
+  --base-url https://keys.example.com \
+  --output docs/evidence/artifacts/byos-probe.json
+
+# AAB 本地 bundletool 验证（不代表 Play 分发）
+bash scripts/evidence/aab_local_verify.sh \
+  --bundle protected.aab --device <serial> \
+  --ks upload.p12 --ks-key-alias upload --ks-pass-env UPLOAD_KS_PASS
+
 # 检查证据结构是否满足发布候选基线
 bash scripts/check-evidence-ready.sh --baseline
 ```
