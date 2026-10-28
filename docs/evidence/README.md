@@ -56,7 +56,7 @@ python3 scripts/evidence/byos_probe.py \
 
 # AAB 本地 bundletool 验证（不代表 Play 分发）
 bash scripts/evidence/aab_local_verify.sh \
-  --bundle protected.aab --device <serial> \
+  --bundle protected.aab --device <serial> --package <package> \
   --ks upload.p12 --ks-key-alias upload --ks-pass-env UPLOAD_KS_PASS
 
 # 检查证据结构是否满足发布候选基线

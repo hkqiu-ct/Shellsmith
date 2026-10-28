@@ -63,6 +63,17 @@
 
 该结果证明 Shellsmith 单 Stub、DEXB、PVM2、PAS2、PSO2 和 Native 加载链路在该样本上可运行，不代表所有业务 APK、ROM 或 ABI 均已验证。
 
+## 4.3 2026-10-28 AAB 本地链验证
+
+| 项目 | 结果 |
+|---|---|
+| 样本 | `tests/fixtures/android-dynamic-feature-app`，7 个模块（base + feature + conditional/ondemand + 3 Asset Pack） |
+| 加固 | `shield protect-aab --profile strict`，PVM2 5/5、PAS2 4 个文件、PSO2 4 个 ABI、资源 ID 3 个 |
+| bundletool | 1.18.3 validate 通过；build-apks 通过；install-apks 安装到 HONOR Android 15 成功 |
+| 状态 | `verified`（本地 bundletool，不含 Google Play 分发） |
+
+该结果不代表 Play App Signing、内部测试轨道、延迟模块真实下载或 Play 服务端行为已验证。
+
 ## 5. 停止条件
 
 - 如果恢复成本没有显著提高，停止继续增加格式复杂度。
