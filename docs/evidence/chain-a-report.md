@@ -38,6 +38,20 @@
 - REA/Frida 的真实动态注入与完整语义重建。
 - 路由 assets `.rtap` 的真机运行验证（当前设备 PackageManager 异常）。
 
+## 4.1 2026-10-28 真机追加验证
+
+| 项目 | 结果 |
+|---|---|
+| 设备 | HONOR BRP-AN00，Android 15 / API 35，arm64-v8a |
+| 测试 | `python3 tests/scripts/check-therouter-compat.py --cli target/release/shield --serial AASEVB5730002067` |
+| TheRouter asm 模式 | 加固、签名、注册、PVM2 通过 |
+| TheRouter index 模式 | 加固、签名、注册、PVM2 通过；产物只含 `therouter_registry.rtap`，无 `.txt` |
+| ARouter | 产物只含 `arouter_routes.rtap`，无 `.txt` |
+| 未知注册模式 | 保持拒绝 |
+| 状态 | `verified`（仅该设备、该模拟样本） |
+
+该结果只证明路由 assets 加密和 TheRouter 兼容在该设备/样本上运行通过，不代表所有 ROM、所有业务路由或所有 PVM2 方法均已验证。
+
 ## 5. 停止条件
 
 - 如果恢复成本没有显著提高，停止继续增加格式复杂度。
