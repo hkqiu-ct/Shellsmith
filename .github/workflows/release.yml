@@ -309,9 +309,6 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
-        with:
-
-
 
       - name: 配置 Java
         uses: actions/setup-java@v5
@@ -405,9 +402,6 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
-        with:
-
-
 
       - name: 配置 Java
         uses: actions/setup-java@v5
