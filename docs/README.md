@@ -79,3 +79,4 @@ Shellsmith 是 Android 与 iOS 双平台应用加固工具。Android 流程加�
 
 - [BYOS HTTPS 密钥服务](design/byos-key-server.md)：用户自建服务所需信息、接口与联调要求。
 - [BYOS 密钥服务端参考实现](design/byos-key-server-reference.md)：Go/PostgreSQL 参考实现、KMS/HSM 后端、部署和运维手册。
+- [证据目录](evidence/README.md)：威胁模型、攻击树、实验矩阵、Chain A/B 报告和发布前证据门禁。
