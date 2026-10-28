@@ -1,0 +1,169 @@
+name: 同步上游分支
+
+# 把 kairowan/Shellsmith 的所有分支同步到本 fork。
+# 只做 fast-forward，不覆盖你自己分支上的提交；需要强制覆盖时手动触发并勾选 force。
+
+on:
+  schedule:
+    # 每天 UTC 02:37（北京时间 10:37）
+    - cron: '37 2 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '强制覆盖与上游分叉的分支（force-with-lease）'
+        type: boolean
+        default: false
+      prune:
+        description: '删除上游已删除、本 fork 仍残留的分支'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/kairowan/Shellsmith.git
+
+jobs:
+  sync:
+    name: 同步上游 → 本 fork
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 检出本 fork
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          # 用 PAT 时 push 会触发 CI；只用 GITHUB_TOKEN 则不会
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: 配置 git 身份
+        shell: bash
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: 拉取上游
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream "$UPSTREAM_REPO" 2>/dev/null \
+            || git remote set-url upstream "$UPSTREAM_REPO"
+          git fetch upstream --prune --force
+          echo "上游分支数: $(git for-each-ref refs/remotes/upstream/ --format='%(refname)' | grep -vc 'refs/remotes/upstream/HEAD' || true)"
+
+      - name: 同步分支
+        shell: bash
+        env:
+          FORCE: ${{ inputs.force }}
+          PRUNE: ${{ inputs.prune }}
+        run: |
+          set -uo pipefail
+
+          created=0
+          updated=0
+          skipped=0
+          failed=0
+          detail=""
+
+          while IFS= read -r ref; do
+            if [ -z "$ref" ] || [ "$ref" = "HEAD" ]; then
+              continue
+            fi
+
+            up_sha=$(git rev-parse "refs/remotes/upstream/$ref")
+            local_sha=$(git rev-parse --quiet --verify "refs/heads/$ref" || true)
+            origin_sha=$(git rev-parse --quiet --verify "refs/remotes/origin/$ref" || true)
+
+            # 1) fork 里没有这个分支 —— 直接建
+            if [ -z "$local_sha" ]; then
+              if git push -q origin "refs/remotes/upstream/$ref:refs/heads/$ref"; then
+                created=$((created + 1))
+                detail+="- 新建 \`$ref\` @ ${up_sha:0:7}"$'\n'
+              else
+                failed=$((failed + 1))
+                detail+="- 失败·新建 \`$ref\`"$'\n'
+              fi
+              continue
+            fi
+
+            # 2) 已经完全一致
+            if [ "$local_sha" = "$up_sha" ]; then
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            # 3) 本地是上游祖先 —— 安全快进
+            if git merge-base --is-ancestor "$local_sha" "$up_sha"; then
+              if git push -q origin "refs/remotes/upstream/$ref:refs/heads/$ref"; then
+                updated=$((updated + 1))
+                detail+="- 快进 \`$ref\` ${local_sha:0:7} → ${up_sha:0:7}"$'\n'
+              else
+                failed=$((failed + 1))
+                detail+="- 失败·快进 \`$ref\`（可能是受保护分支）"$'\n'
+              fi
+              continue
+            fi
+
+            # 4) 已分叉：有本地提交或历史被改写过
+            if [ "${FORCE:-false}" = "true" ] && [ -n "$origin_sha" ]; then
+              if git push -q --force-with-lease="refs/heads/$ref:$origin_sha" \
+                   origin "refs/remotes/upstream/$ref:refs/heads/$ref"; then
+                updated=$((updated + 1))
+                detail+="- 强制覆盖 \`$ref\` ${origin_sha:0:7} → ${up_sha:0:7}"$'\n'
+              else
+                failed=$((failed + 1))
+                detail+="- 失败·强制 \`$ref\`（lease 失效或分支受保护）"$'\n'
+              fi
+            else
+              skipped=$((skipped + 1))
+              detail+="- 分叉跳过 \`$ref\`（本地 ${local_sha:0:7} / 上游 ${up_sha:0:7}）"$'\n'
+            fi
+          done < <(git for-each-ref --format='%(refname:lstrip=3)' refs/remotes/upstream/)
+
+          # 5) 可选：清理上游已删除的分支
+          if [ "${PRUNE:-false}" = "true" ]; then
+            default_branch=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || echo main)
+            while IFS= read -r b; do
+              if [ -z "$b" ] || [ "$b" = "HEAD" ] || [ "$b" = "$default_branch" ]; then
+                continue
+              fi
+              if ! git rev-parse --quiet --verify "refs/remotes/upstream/$b" >/dev/null 2>&1; then
+                if git push -q origin --delete "$b"; then
+                  detail+="- 删除 \`$b\`（上游已不存在）"$'\n'
+                else
+                  failed=$((failed + 1))
+                  detail+="- 失败·删除 \`$b\`"$'\n'
+                fi
+              fi
+            done < <(git for-each-ref --format='%(refname:lstrip=3)' refs/remotes/origin/)
+          fi
+
+          {
+            echo "## 上游同步结果"
+            echo ""
+            echo "| 新建 | 快进/覆盖 | 跳过 | 失败 |"
+            echo "|---:|---:|---:|---:|"
+            echo "| $created | $updated | $skipped | $failed |"
+            echo ""
+            if [ -n "$detail" ]; then
+              echo "$detail"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "$detail"
+          if [ "$failed" -gt 0 ]; then
+            echo "::error::$failed 个分支同步失败，见上方明细"
+            exit 1
+          fi
+
+      - name: 同步标签
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git push -q origin --tags || echo "::warning::部分标签推送失败（可能是标签已存在且指向不同提交）"
