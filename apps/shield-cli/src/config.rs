@@ -114,6 +114,7 @@ impl CliConfig {
             native_vmp_evidence: args
                 .native_vmp_evidence
                 .or_else(|| self.protect.native_vmp_evidence.clone()),
+            protect_route_assets: args.protect_route_assets,
             json: args.json,
             verbose: args.verbose,
         })
@@ -188,6 +189,7 @@ pub(crate) struct ResolvedProtectArgs {
     pub xop_true_vmp_prefix: Vec<String>,
     pub pvm2_required_methods: Option<PathBuf>,
     pub native_vmp_evidence: Option<PathBuf>,
+    pub protect_route_assets: bool,
     pub json: bool,
     pub verbose: bool,
 }

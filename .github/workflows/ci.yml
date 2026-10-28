@@ -5,7 +5,9 @@ on:
     branches:
       - main
       - master
+      - next
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -85,6 +87,8 @@ jobs:
 
   fusion-contract:
     name: 融合协议和单壳契约
+    needs: changes
+    if: needs.changes.outputs.run_checks == 'true'
     runs-on: ubuntu-24.04
 
     steps:
@@ -115,6 +119,8 @@ jobs:
 
   ios-core:
     name: iOS 核心与 Xcode ${{ matrix.xcode }} 归档
+    needs: changes
+    if: needs.changes.outputs.run_checks == 'true'
     runs-on: macos-15
     strategy:
       matrix:
@@ -189,9 +195,96 @@ jobs:
           npm run typecheck
           npm run build
 
+  dependency-audit:
+    name: 依赖漏洞扫描
+    needs: changes
+    if: needs.changes.outputs.run_checks == 'true'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 检查 Rust 依赖公告
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
+          arguments: --all-features
+
+  evidence-baseline:
+    name: 证据基线
+    needs: changes
+    if: >-
+      needs.changes.outputs.run_checks == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/next') ||
+       (github.event_name == 'pull_request' && github.base_ref == 'main'))
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 检查证据目录与发布门禁
+        run: bash scripts/check-evidence-ready.sh --baseline
+
+      - name: 运行证据脚本测试
+        run: python3 -m unittest discover -s scripts/tests -p 'test_evidence_*.py' -v
+
+      - name: 运行恢复基准冒烟
+        run: |
+          python3 scripts/evidence/recovery_benchmark.py             --name ci-smoke             --command "python3 -c 'print(1)'"             --output target/evidence/ci-smoke.json
+
+  ci-gate:
+    name: CI 通过
+    needs:
+      - changes
+      - quick-checks
+      - fusion-contract
+      - ios-core
+      - full-quality
+      - evidence-baseline
+      - stub
+      - linux-gui-bundle
+      - windows-api19-resources
+      - release-readiness
+    if: always()
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 汇总必需检查
+        shell: bash
+        run: |
+          set -euo pipefail
+          results=(
+            "${{ needs.changes.result }}"
+            "${{ needs.quick-checks.result }}"
+            "${{ needs.fusion-contract.result }}"
+            "${{ needs.ios-core.result }}"
+            "${{ needs.evidence-baseline.result }}"
+            "${{ needs.full-quality.result }}"
+            "${{ needs.stub.result }}"
+            "${{ needs.linux-gui-bundle.result }}"
+            "${{ needs.windows-api19-resources.result }}"
+            "${{ needs.release-readiness.result }}"
+          )
+          for result in "${results[@]}"; do
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              echo "必需检查失败：$result"
+              exit 1
+            fi
+          done
+          echo "所有已执行的必需检查均通过（skipped 视为未触发，不阻塞普通 PR）。"
+
   linux-gui-bundle:
     name: Linux Tauri 打包冒烟检查
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: >-
+      needs.changes.outputs.run_checks == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/next') ||
+       (github.event_name == 'pull_request' && github.base_ref == 'main'))
     runs-on: ubuntu-22.04
 
     steps:
@@ -277,7 +370,12 @@ jobs:
 
   stub:
     name: Android 壳构建
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: >-
+      needs.changes.outputs.run_checks == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/next') ||
+       (github.event_name == 'pull_request' && github.base_ref == 'main'))
     runs-on: ubuntu-24.04
 
     steps:
@@ -327,9 +425,20 @@ jobs:
       - name: 运行端到端加固回归测试
         run: bash tests/scripts/run-protect-e2e.sh
 
+      - name: 构建 CLI
+        run: cargo build -p shield-cli --release
+
+      - name: 验证 TheRouter 编译期注册、索引回退与未知模式
+        run: python3 tests/scripts/check-therouter-compat.py --cli target/release/shield
+
   windows-api19-resources:
     name: Windows Android 4.4 资源构建
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: >-
+      needs.changes.outputs.run_checks == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/next') ||
+       (github.event_name == 'pull_request' && github.base_ref == 'main'))
     runs-on: windows-2025
 
     steps:
@@ -378,7 +487,12 @@ jobs:
 
   release-readiness:
     name: 发布前检查
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: >-
+      needs.changes.outputs.run_checks == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/next') ||
+       (github.event_name == 'pull_request' && github.base_ref == 'main'))
     runs-on: ubuntu-24.04
 
     steps:
@@ -417,6 +531,9 @@ jobs:
 
       - name: 构建 shield-stub
         run: make build-stub build-byos build-byos-play
+
+      - name: 恢复受版本控制的打包器 JAR
+        run: git checkout -- tools/xop-pvm2-packer.jar
 
       - name: 运行发布前检查
         run: bash scripts/check-release-ready.sh

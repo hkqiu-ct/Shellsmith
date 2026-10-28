@@ -11,6 +11,7 @@ pub(crate) fn process_dex(
     ikm: &[u8],
     compression_layers: u8,
     byos: Option<(&str, &str)>,
+    protect_route_assets: bool,
 ) -> Result<CacheIdentity> {
     let mut dex_files = Vec::new();
     for entry in fs::read_dir(apk_dir)? {
@@ -43,22 +44,51 @@ pub(crate) fn process_dex(
 
     let assets_dir = apk_dir.join("assets");
     fs::create_dir_all(&assets_dir)?;
+    let route_key = protect_route_assets
+        .then(|| crate::dex_packer::crypto::derive_route_assets_key(ikm, signature.as_bytes()));
+    let arouter_rtap = assets_dir.join("arouter_routes.rtap");
+    let arouter_txt = assets_dir.join("arouter_routes.txt");
+    let router_rtap = assets_dir.join("therouter_registry.rtap");
+    let router_txt = assets_dir.join("therouter_registry.txt");
+
     let routes = crate::dex_packer::route_scanner::scan_arouter_routes(&dex_dir)?;
     if !routes.is_empty() {
-        let route_file = assets_dir.join("arouter_routes.txt");
-        fs::write(&route_file, routes.join("\n"))?;
-        print_success(&format!("扫描到 ARouter 路由表类 {} 个", routes.len()));
+        let plaintext = routes.join("\n");
+        if let Some(key) = &route_key {
+            let blob = crate::dex_packer::crypto::encrypt_route_asset(plaintext.as_bytes(), key, 1);
+            fs::write(&arouter_rtap, blob)?;
+            let _ = fs::remove_file(&arouter_txt);
+        } else {
+            fs::write(&arouter_txt, plaintext)?;
+        }
+        print_success(&format!(
+            "扫描到 ARouter 路由表类 {} 个（{}）",
+            routes.len(),
+            if route_key.is_some() {
+                "RTA1"
+            } else {
+                "明文"
+            }
+        ));
     }
     let therouter = crate::dex_packer::route_scanner::scan_therouter_registry(&dex_dir)?;
-    if !therouter.is_empty() {
+    if !therouter.is_empty() && therouter.asm_registered {
+        let _ = fs::remove_file(&router_rtap);
+        let _ = fs::remove_file(&router_txt);
+        print_success("TheRouter 已启用编译期注册，保留原注册链路，无需运行时索引");
+    } else if !therouter.is_empty() {
         let holder = therouter
             .holder
             .as_ref()
-            .context("扫描到 TheRouter 生成类，但未找到运行时索引持有类")?;
-        fs::write(
-            assets_dir.join("therouter_registry.txt"),
-            therouter.to_index_text(),
-        )?;
+            .context("THEROUTER_REGISTRATION_UNRESOLVED：检测到 TheRouter 生成类，但既未确认编译期注册标记，也未找到可用的运行时索引。此为加固兼容性限制，不代表原 App 存在 bug；请核对 TheRouter 插件与运行库版本、编译期注册和混淆结果，不能仅忽略此检查后继续加固")?;
+        let plaintext = therouter.to_index_text();
+        if let Some(key) = &route_key {
+            let blob = crate::dex_packer::crypto::encrypt_route_asset(plaintext.as_bytes(), key, 2);
+            fs::write(&router_rtap, blob)?;
+            let _ = fs::remove_file(&router_txt);
+        } else {
+            fs::write(&router_txt, plaintext)?;
+        }
         print_success(&format!(
             "扫描到 TheRouter 注册项 {} 个（索引 {}）",
             therouter.services.len() + therouter.routes.len() + therouter.autowired.len(),

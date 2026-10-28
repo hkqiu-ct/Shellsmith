@@ -39,6 +39,8 @@ pub(crate) struct AabProtectRequest {
     pub(crate) xop_true_vmp_prefixes: Vec<String>,
     pub(crate) pvm2_required_methods: Option<String>,
     pub(crate) native_vmp_evidence: Option<String>,
+    #[serde(default)]
+    pub(crate) protect_route_assets: bool,
 }
 
 pub(crate) fn check_aab(app: &tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
@@ -143,6 +145,7 @@ pub(crate) async fn execute_protect_aab(
                 .native_vmp_evidence
                 .map(PathBuf::from)
                 .map(strip_unc_prefix),
+            protect_route_assets: request.protect_route_assets,
             xop_shell_dir: None,
             xop_profile: XopProfileArg::Industry,
             xop_no_protect_so: false,

@@ -3,6 +3,7 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
 };
 use hkdf::Hkdf;
+use rand::RngCore;
 use sha2::Sha256;
 
 pub fn derive_key(ikm: &[u8], nonce: &[u8; 12], cert_fingerprint: &[u8]) -> [u8; 32] {
@@ -50,6 +51,40 @@ pub fn derive_native_so_key(ikm: &[u8], cert_fingerprint: &[u8]) -> [u8; 16] {
     okm
 }
 
+/// Per-build key for the route index sidecars. The route assets are consumed by
+/// the shell itself, so they can use the same IKM without a new key hierarchy.
+pub fn derive_route_assets_key(ikm: &[u8], cert_fingerprint: &[u8]) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(Some(cert_fingerprint), ikm);
+    let mut okm = [0u8; 32];
+    hk.expand(b"mocika-shield/route-assets/v1", &mut okm)
+        .expect("HKDF expand length is fixed at 32");
+    okm
+}
+
+pub const ROUTE_ASSET_MAGIC: &[u8; 4] = b"RTA1";
+pub const ROUTE_ASSET_VERSION: u8 = 1;
+
+/// Encrypt a route index with a per-file nonce. AAD binds the format and the
+/// index kind so an ARouter blob cannot be swapped for a TheRouter blob.
+pub fn encrypt_route_asset(plaintext: &[u8], key: &[u8; 32], kind: u8) -> Vec<u8> {
+    let mut nonce = [0u8; 12];
+    rand::rng().fill_bytes(&mut nonce);
+    let ciphertext = encrypt_with_aad(plaintext, key, &nonce, &route_asset_aad(kind));
+    let mut out = Vec::with_capacity(4 + 1 + 12 + 4 + ciphertext.len());
+    out.extend_from_slice(ROUTE_ASSET_MAGIC);
+    out.push(ROUTE_ASSET_VERSION);
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&(ciphertext.len() as u32).to_le_bytes());
+    out.extend_from_slice(&ciphertext);
+    out
+}
+
+pub fn route_asset_aad(kind: u8) -> Vec<u8> {
+    let mut aad = b"mocika-shield/route-assets/v1".to_vec();
+    aad.push(kind);
+    aad
+}
+
 pub fn encrypt(plaintext: &[u8], key: &[u8; 32], nonce: &[u8; 12]) -> Vec<u8> {
     let cipher = ChaCha20Poly1305::new(key.into());
     let nonce = Nonce::from_slice(nonce);
@@ -76,6 +111,24 @@ pub fn decrypt(ciphertext: &[u8], key: &[u8; 32], nonce: &[u8; 12]) -> Result<Ve
     let nonce = Nonce::from_slice(nonce);
     cipher
         .decrypt(nonce, ciphertext)
+        .map_err(|_| "ChaCha20-Poly1305 解密失败：数据已损坏或密钥不匹配".to_string())
+}
+
+#[cfg(test)]
+pub fn decrypt_with_aad(
+    ciphertext: &[u8],
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+) -> Result<Vec<u8>, String> {
+    ChaCha20Poly1305::new(key.into())
+        .decrypt(
+            Nonce::from_slice(nonce),
+            chacha20poly1305::aead::Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
         .map_err(|_| "ChaCha20-Poly1305 解密失败：数据已损坏或密钥不匹配".to_string())
 }
 
@@ -170,5 +223,30 @@ mod tests {
         let mut ciphertext = encrypt(b"payload", &key, &nonce);
         ciphertext[0] ^= 0x01;
         assert!(decrypt(&ciphertext, &key, &nonce).is_err());
+    }
+
+    #[test]
+    fn route_asset_roundtrip_is_kind_bound() {
+        let key = derive_route_assets_key(b"ikm", b"certificate");
+        let plaintext = b"com.example.Route\ncom.example.Other";
+        let blob = encrypt_route_asset(plaintext, &key, 1);
+        assert_eq!(&blob[..4], ROUTE_ASSET_MAGIC);
+        assert_eq!(blob[4], ROUTE_ASSET_VERSION);
+        let nonce: [u8; 12] = blob[5..17].try_into().unwrap();
+        let len = u32::from_le_bytes(blob[17..21].try_into().unwrap()) as usize;
+        assert_eq!(len, blob.len() - 21);
+        assert_eq!(
+            decrypt_with_aad(&blob[21..], &key, &nonce, &route_asset_aad(1)).unwrap(),
+            plaintext
+        );
+        assert!(decrypt_with_aad(&blob[21..], &key, &nonce, &route_asset_aad(2)).is_err());
+    }
+
+    #[test]
+    fn route_assets_key_is_certificate_bound() {
+        assert_ne!(
+            derive_route_assets_key(b"ikm", b"cert-a"),
+            derive_route_assets_key(b"ikm", b"cert-b")
+        );
     }
 }

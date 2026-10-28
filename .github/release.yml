@@ -3,6 +3,19 @@ changelog:
     labels:
       - skip-release-notes
   categories:
+    - title: 安全与兼容
+      labels:
+        - security
+        - compat
+    - title: Android
+      labels:
+        - android
+    - title: iOS
+      labels:
+        - ios
+    - title: BYOS 与服务端
+      labels:
+        - byos
     - title: 新功能
       labels:
         - feat

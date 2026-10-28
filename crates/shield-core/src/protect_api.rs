@@ -93,6 +93,8 @@ pub struct ProtectOptions {
     pub pvm2_required_methods: Option<PathBuf>,
     /// Native 证据清单：模块/lib/ABI/库名.so、制表符、SDK 构建报告路径。
     pub native_vmp_evidence: Option<PathBuf>,
+    /// 加密 ARouter/TheRouter 路由索引 assets；需要配套壳运行时支持。
+    pub protect_route_assets: bool,
     /// AAB dynamic-feature DEX staging root. Files use the same PVM2 key and
     /// global DEX index space, then are written back before base DEX packing.
     pub external_pvm2_dex_dir: Option<PathBuf>,
@@ -772,6 +774,7 @@ fn protect_apk_inner(
         &ikm,
         compression_layers,
         byos_token.as_deref().zip(opts.byos_endpoint.as_deref()),
+        opts.protect_route_assets,
     )
     .map_err(ShieldError::from)?;
     add_cache_identity(&apk_dir, &cache_identity).map_err(ShieldError::from)?;
@@ -828,6 +831,15 @@ fn protect_apk_inner(
     }
     let identity_report =
         method_report.get_or_insert_with(crate::protection_report::MethodReport::native_only);
+    identity_report.build.insert(
+        "route_assets".into(),
+        if opts.protect_route_assets {
+            "rta1"
+        } else {
+            "plaintext"
+        }
+        .into(),
+    );
     identity_report.build.insert(
         "project_identity".into(),
         serde_json::to_value(&project_identity)

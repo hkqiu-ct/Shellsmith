@@ -1,0 +1,7 @@
+{
+  "cases": [
+    {"id": "int-add", "input": {"a": 1, "b": 2}, "expect": 3},
+    {"id": "int-overflow", "input": {"a": 2147483647, "b": 1}, "expect": -2147483648},
+    {"id": "null-path", "input": {"a": null, "b": 0}, "expect": null}
+  ]
+}

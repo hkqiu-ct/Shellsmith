@@ -200,6 +200,7 @@ impl IosProtectRequest {
                     .into_iter()
                     .map(str::to_string)
                     .collect(),
+                block_on_critical: false,
             }),
         };
         (

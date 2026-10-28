@@ -25,12 +25,13 @@
 
 当前阶段采用 **单主干 `main` + tag 发布**：
 
-- `main`：长期稳定主干，保持可构建、可发布
+- `main`：长期稳定主干，保持可构建、可发布；只有发布 PR 或紧急修复合入
+- `next`：批量版本的临时集成分支；日常功能和修复先合入 `next`，全部收口后再通过一个发布 PR 合入 `main`
 - `vX.Y.Z` / `vX.Y.Z-rc.N`：唯一正式发布标记
-- `feat/*`：复杂功能的临时开发分支，合并回 `main` 后删除
-- `fix/*`：缺陷修复的临时分支，合并回 `main` 后删除
+- `feat/*`：复杂功能的临时开发分支，合并回 `next` 或 `main` 后删除
+- `fix/*`：缺陷修复的临时分支，合并回 `next` 或 `main` 后删除
 
-暂不维护长期 `develop` 分支，也不默认创建 `release/*` / `hotfix/*` 分支，避免刚开源阶段增加流程成本。
+`next` 不是长期 `develop` 分支：每个批量版本从最新 `main` 重建，发布完成后删除或重置。这样既能把多个 PR 的验证集中在一次发布中，又不会让 `main` 长期偏离稳定状态。
 
 只有出现以下情况时，才新增长期维护分支：
 
@@ -57,17 +58,22 @@ GitHub 的 `main` 分支必须保持保护状态，正式代码统一通过临�
 
 Pull Request 合并前必须通过以下 CI 检查：
 
-- `基础快速检查`
+- `CI 通过`（汇总门禁）
 
-普通 PR 执行快速检查、融合协议、iOS 归档和完整代码质量检查；完整质量检查包含 CI 工具链上的 Clippy、Rust 测试及前端检查，避免只在合并后发现新工具链问题。Android 壳构建、Linux Tauri 打包冒烟、Windows Android 4.4 资源构建和发布前检查仍仅在手动触发 CI 时执行；版本发布由 Release 工作流完整构建三个平台。发布 PR 应等待全部已触发的检查通过。
+`CI 通过` 会汇总快速检查、完整代码质量、融合协议、iOS 归档以及已触发的 Android/Linux/Windows/发布前检查。普通 PR 至少执行单元测试和静态检查；`next` 分支和 `next -> main` 发布 PR 还会执行 Android 壳构建、TheRouter 兼容回归、Linux Tauri 打包、Windows Android 4.4 资源构建和发布前检查。`skipped` 表示该检查在当前事件下未触发，不阻塞普通 PR；`failure` 或 `cancelled` 会阻塞合并。
+
+> 仓库设置需要把 `CI 通过` 配置为 `main` 和 `next` 的必需状态检查。当前远程仓库实际未启用分支保护，启用前该门禁只提供信号，不能阻止直接推送或绕过。
 
 日常开发流程：
 
 1. 从最新 `main` 创建 `feat/*`、`fix/*`、`docs/*` 等临时分支。
-2. 完成修改和本地验证后推送远端并创建 Pull Request。
-3. 等待全部必需 CI 通过，并解决未完成的评审对话。
-4. 合并到 `main`，随后删除临时分支。
-5. 只有发布版本时才从已验证的 `main` 创建并推送 `vX.Y.Z` tag。
+2. 完成修改和本地验证后推送远端并创建 Pull Request；批量版本的目标分支为 `next`。
+3. 等待 `CI 通过` 汇总门禁通过，并解决未完成的评审对话。
+4. 合并到 `next`，随后删除临时分支；`next` 上的合并提交会再跑一次组合 CI。
+5. 全部内容收口后，创建唯一的 `next -> main` 发布 PR，跑完整 CI（Android 壳、Linux 打包、Windows 4.4、发布前检查）。
+6. 发布 PR 合入 `main` 后，运行 `scripts/bump-version.sh` 同步版本并完成版本提交。
+7. 在 GitHub Actions 手动运行 `Release` 工作流并输入版本号；普通 PR 合并和 `next` 合并只跑 CI，不触发 Release。
+8. Release 工作流成功后自动创建 `vX.Y.Z` tag 并公开 Release；不要提前手动推送 tag。
 
 管理员绕过只用于保护规则配置错误、CI 基础设施不可用或紧急安全修复。绕过后必须补建对应 Pull Request 或维护记录，不作为日常直接推送 `main` 的方式。
 
@@ -120,6 +126,38 @@ bash scripts/bump-version.sh x.y.z-rc.1
 ---
 
 ## 发布命令
+
+### GitHub Actions 发布（推荐）
+
+批量版本通过 `next` 集成分支完成后，按以下顺序发布：
+
+```bash
+# 1. 从最新 main 创建发布分支
+git switch main
+git pull --ff-only origin main
+git switch -c release/1.10.0
+
+# 2. 同步版本号（会更新 Cargo、Tauri、GUI 和锁文件）
+bash scripts/bump-version.sh 1.10.0
+
+# 3. 提交并推送发布分支，创建 release/1.10.0 -> main 的 PR
+git add -A
+git commit -m "chore: 发布 1.10.0"
+git push -u origin release/1.10.0
+
+# 4. PR 通过完整 CI 并合并后，在 main 上手动触发 Release
+git switch main
+git pull --ff-only origin main
+gh workflow run release.yml --ref main -f version=1.10.0
+```
+
+Release 工作流会校验版本号与 `package.json` 一致，然后创建 `v1.10.0` tag 并公开 Release。仅推送 tag 不会触发当前工作流。
+
+批量开发期间如果 GitHub 仍因历史默认分支配置在 `next` 推送时创建空 Release 运行，可在 Actions 页面手动禁用 `Release` 工作流；正式发布前再启用。禁用不影响 CI。
+
+发布前确认 `.github/release-notes/versions/1.10.0.md` 已按实际合并内容更新。`Release` 工作流会在 `release` environment 等待审批，然后构建 Linux、macOS、Windows 和 Android runtime 资源，并生成 `latest.json`。
+
+普通 PR 合并、`next` 合并和文档提交只触发 CI，不会触发 Release。
 
 ### Linux / macOS
 

@@ -104,6 +104,7 @@ pub(crate) struct ProtectExecution {
     pub(crate) xop_true_vmp_prefixes: Vec<String>,
     pub(crate) pvm2_required_methods: Option<String>,
     pub(crate) native_vmp_evidence: Option<String>,
+    pub(crate) protect_route_assets: bool,
     pub(crate) signing_certificate: Option<CertificateRecord>,
     pub(crate) signed_output: Option<String>,
 }
@@ -232,6 +233,7 @@ pub(crate) async fn execute_protect_apk(
                 .native_vmp_evidence
                 .map(PathBuf::from)
                 .map(strip_unc_prefix),
+            protect_route_assets: request.protect_route_assets,
             external_pvm2_dex_dir: None,
             external_pas2_assets_dir: None,
             deferred_pas2_asset_modules: Vec::new(),

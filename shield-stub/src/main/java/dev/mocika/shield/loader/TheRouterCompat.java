@@ -18,6 +18,7 @@ import java.util.Map;
 final class TheRouterCompat {
     private static final String TAG = "trc";
     private static final String INDEX_ASSET = "therouter_registry.txt";
+    private static final String INDEX_RTAP = "therouter_registry.rtap";
     private static final String AUTOWIRED_SUFFIX = "__TheRouter__Autowired";
 
     private TheRouterCompat() {}
@@ -113,23 +114,45 @@ final class TheRouterCompat {
     }
 
     private static Registry readRegistry(Context context) throws Exception {
-        Registry result = new Registry();
-        try (InputStream input = context.getAssets().open(INDEX_ASSET);
-             BufferedReader reader = new BufferedReader(new InputStreamReader(input, "UTF-8"))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                int separator = line.indexOf('\t');
-                if (separator <= 0 || separator == line.length() - 1) continue;
-                String kind = line.substring(0, separator);
-                String name = line.substring(separator + 1).trim();
-                if (name.isEmpty()) continue;
-                if ("HOLDER".equals(kind)) result.holder = name;
-                else if ("SERVICE".equals(kind)) result.services.add(name);
-                else if ("ROUTE".equals(kind)) result.routes.add(name);
-                else if ("AUTOWIRED".equals(kind)) result.autowired.add(name);
+        try (InputStream input = context.getAssets().open(INDEX_RTAP)) {
+            return parseRegistry(new String(Ld.z(readAll(input), 2), "UTF-8").split("\\r?\\n"));
+        } catch (FileNotFoundException encryptedAbsent) {
+            try (InputStream input = context.getAssets().open(INDEX_ASSET);
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(input, "UTF-8"))) {
+                List<String> lines = new ArrayList<>();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    lines.add(line);
+                }
+                return parseRegistry(lines.toArray(new String[0]));
             }
         }
+    }
+
+    private static Registry parseRegistry(String[] lines) {
+        Registry result = new Registry();
+        for (String line : lines) {
+            int separator = line.indexOf('\t');
+            if (separator <= 0 || separator == line.length() - 1) continue;
+            String kind = line.substring(0, separator);
+            String name = line.substring(separator + 1).trim();
+            if (name.isEmpty()) continue;
+            if ("HOLDER".equals(kind)) result.holder = name;
+            else if ("SERVICE".equals(kind)) result.services.add(name);
+            else if ("ROUTE".equals(kind)) result.routes.add(name);
+            else if ("AUTOWIRED".equals(kind)) result.autowired.add(name);
+        }
         return result;
+    }
+
+    private static byte[] readAll(InputStream input) throws java.io.IOException {
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
     }
 
     private static final class Registry {
