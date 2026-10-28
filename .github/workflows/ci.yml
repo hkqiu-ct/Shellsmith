@@ -212,6 +212,30 @@ jobs:
           command: check advisories
           arguments: --all-features
 
+  evidence-baseline:
+    name: 证据基线
+    needs: changes
+    if: >-
+      needs.changes.outputs.run_checks == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/next') ||
+       (github.event_name == 'pull_request' && github.base_ref == 'main'))
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 检查证据目录与发布门禁
+        run: bash scripts/check-evidence-ready.sh --baseline
+
+      - name: 运行证据脚本测试
+        run: python3 -m unittest discover -s scripts/tests -p 'test_evidence_*.py' -v
+
+      - name: 运行恢复基准冒烟
+        run: |
+          python3 scripts/evidence/recovery_benchmark.py             --name ci-smoke             --command "python3 -c 'print(1)'"             --output target/evidence/ci-smoke.json
+
   ci-gate:
     name: CI 通过
     needs:
@@ -220,6 +244,7 @@ jobs:
       - fusion-contract
       - ios-core
       - full-quality
+      - evidence-baseline
       - stub
       - linux-gui-bundle
       - windows-api19-resources
@@ -237,6 +262,7 @@ jobs:
             "${{ needs.quick-checks.result }}"
             "${{ needs.fusion-contract.result }}"
             "${{ needs.ios-core.result }}"
+            "${{ needs.evidence-baseline.result }}"
             "${{ needs.full-quality.result }}"
             "${{ needs.stub.result }}"
             "${{ needs.linux-gui-bundle.result }}"

@@ -53,6 +53,9 @@ jobs:
           }
           git diff --check
 
+      - name: 检查证据基线
+        run: bash scripts/check-evidence-ready.sh --baseline
+
   prepare:
     name: 准备草稿 Release
     needs: verify

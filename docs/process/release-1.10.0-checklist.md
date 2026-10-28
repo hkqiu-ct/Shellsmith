@@ -38,6 +38,8 @@
 - [ ] `bash tests/scripts/run-protect-e2e.sh`
 - [ ] `python3 tests/scripts/check-therouter-compat.py --cli target/release/shield`（脚本已启用 `--protect-route-assets`，断言只存在 `.rtap`、不存在明文 `.txt`）
 - [ ] `bash scripts/check-release-ready.sh`
+- [ ] `bash scripts/check-evidence-ready.sh --baseline`
+- [ ] `python3 -m unittest discover -s scripts/tests -p 'test_evidence_*.py' -v`
 - [ ] `make audit-stub-dex`
 
 ## 4. 平台与产物
