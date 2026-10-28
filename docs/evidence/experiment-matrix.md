@@ -13,6 +13,7 @@
 | A-07 | A | 运行时明文采样 | 真机、私有目录、内存 | 记录窗口/路径/清理；无数据即 unverified | 待执行 |
 | A-08 | A | 启动/PSS 预算 | 冷启动、PSS | 超过预注册预算即失败 | 历史样本待更新 |
 | A-09 | A | 路由 assets 真机 | `.rtap`、TheRouter asm/index | 页面/服务/参数注入失败即失败 | verified：HONOR Android 15，单样本 |
+| A-10 | A | 真机 E2E smoke | 双 DEX、PVM2、PAS2、PSO2 | 任一启动/业务标记失败即失败 | verified：HONOR Android 15，基础 + strict |
 | B-01 | B | 规范摘要/固定向量 | 协议字段 | 与测试向量不一致即失败 | 已有单测 |
 | B-02 | B | 未知设备批准/撤销 | 设备公钥 | 未批准拒绝、撤销后拒绝 | 已有单测 |
 | B-03 | B | 并发重放 | 相同 nonce | 成功次数 >1 即失败 | 已有单测 |

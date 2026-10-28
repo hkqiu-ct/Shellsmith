@@ -52,6 +52,17 @@
 
 该结果只证明路由 assets 加密和 TheRouter 兼容在该设备/样本上运行通过，不代表所有 ROM、所有业务路由或所有 PVM2 方法均已验证。
 
+## 4.2 2026-10-28 真机 E2E 追加验证
+
+| 项目 | 结果 |
+|---|---|
+| 设备 | HONOR BRP-AN00，Android 15 / API 35，arm64-v8a |
+| 基础 E2E | `RUN_DEVICE_TEST=1 bash tests/scripts/run-protect-e2e.sh`：双 DEX 基线、加固包首次启动、缓存启动、Native、openFd、secondary 全部通过 |
+| 严格 E2E | 追加 `PVM2_STRICT_TEST=1`：54/54 方法转换、PAS2 1 个文件、PSO2 4 个 ABI、PVM2 ISA 2；首次启动与缓存启动通过 |
+| 状态 | `verified`（仅该设备、该 smoke 样本） |
+
+该结果证明 Shellsmith 单 Stub、DEXB、PVM2、PAS2、PSO2 和 Native 加载链路在该样本上可运行，不代表所有业务 APK、ROM 或 ABI 均已验证。
+
 ## 5. 停止条件
 
 - 如果恢复成本没有显著提高，停止继续增加格式复杂度。

@@ -6,7 +6,7 @@ FIXTURE="$ROOT/tests/fixtures/android-smoke-app"
 PACKAGE_NAME="dev.mocika.shield.smoke"
 COMPONENT="$PACKAGE_NAME/.MainActivity"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mocika-protect-e2e.XXXXXX")"
-trap 'echo "端到端检查失败，第 $LINENO 行：$BASH_COMMAND；产物保留在 $WORK" >&2' ERR
+trap 'echo "端到端检查失败，第 $LINENO 行：${BASH_COMMAND}；产物保留在 $WORK" >&2' ERR
 trap 'status=$?; if [[ "$status" == 0 ]]; then rm -rf "$WORK"; fi' EXIT
 
 for command in java keytool cargo unzip; do
