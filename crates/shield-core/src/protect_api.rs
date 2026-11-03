@@ -22,7 +22,7 @@ use crate::protect::{
     },
     native_alias::verify_in_apk,
     resource_format::{
-        normalize_empty_resource_metadata, normalize_mislabeled_jpeg_resources,
+        normalize_empty_resource_metadata, normalize_mislabeled_image_resources,
         restore_original_resources, verify_original_resources,
     },
     runtime::{inject_runtime, read_runtime_selection},
@@ -451,10 +451,10 @@ fn protect_apk_inner(
     let native_lib_policy =
         read_native_lib_packaging_policy(&apk_dir).map_err(ShieldError::from)?;
     let normalized_resources =
-        normalize_mislabeled_jpeg_resources(&apk_dir).map_err(ShieldError::from)?;
+        normalize_mislabeled_image_resources(&apk_dir).map_err(ShieldError::from)?;
     if normalized_resources > 0 {
         print_success(&format!(
-            "已修正 {normalized_resources} 个 JPEG 内容伪装 PNG 的资源文件"
+            "已修正 {normalized_resources} 个非 PNG 内容伪装 .png 的资源文件"
         ));
     }
 

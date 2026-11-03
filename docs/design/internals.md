@@ -225,7 +225,7 @@ Offset     Size      字段             说明
 
 ### 可选 BYOS：DEXB v7
 
-默认仍输出 v6；CLI 显式配置用户 HTTPS 服务、构建凭据及 `--byos-auth` 时输出 v7。设备批准使用 `resources-byos.zip`（Android 8.0+），Play 使用 `resources-byos-play.zip`（Android 10+）。
+默认仍输出 v6；CLI 显式配置用户 HTTPS 服务、构建凭据及 `--byos-auth` 时输出 v7。设备批准使用 `resources-byos.zip`（Android 7.0+），Play 使用 `resources-byos-play.zip`（Android 10+）。
 
 | 顺序 | 字段 | 长度 |
 |---|---|---|
