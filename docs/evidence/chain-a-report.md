@@ -81,11 +81,11 @@
 | 图片格式归一化 | `res/drawable*`、`res/mipmap*` 下 JPEG/WebP 内容伪装 `.png` 时按实际格式无损改名；GIF/BMP/未知/空文件、九宫格和同名目标明确失败；`res/raw` 不改动。资源格式 11 项单测通过 |
 | 合成 WebP E2E | 将 smoke APK 的 `res/6C.png` 替换为 WebP 字节后执行加固，日志出现“已修正 1 个非 PNG 内容伪装 .png 的资源文件”，重打包、对齐和完成阶段通过；输出按原资源恢复策略保留原始条目 |
 | ARouter 覆盖安装 | `attachBaseContext()` 在 ContentProvider/宿主 Application 前写入路由缓存；版本名、版本号任一变化或缓存缺失（含空集合）时主动注册全部路由；`onCreate` 保留幂等兜底。JVM 单测覆盖失效判定与空缓存 |
-| ARouter 真机回归 | HONOR BRP-AN00 / Android 15 / arm64-v8a：自建 ARouter 1.5.2 样本，未加固 v1 同签名覆盖安装加固 v2，首次启动 `versionChanged=true preRegister=true`，Fragment 与 Activity 路由均成功；将 `ROUTER_MAP` 置空并保持版本匹配后再次启动，`cacheMissing=true preRegister=true`，Fragment 路由仍成功 |
+| ARouter 真机回归 | HONOR BRP-AN00 / Android 15 / arm64-v8a 与 API 34 / Android 14 / arm64-v8a 模拟器：自建 ARouter 1.5.2 样本，未加固 v1 同签名覆盖安装加固 v2，首次启动 `versionChanged=true preRegister=true`，Fragment 与 Activity 路由均成功；将 `ROUTER_MAP` 置空并保持版本匹配后再次启动，`cacheMissing=true preRegister=true`，Fragment 路由仍成功 |
 | 路由与真机 E2E | `check-therouter-compat.py --serial ...` 的 asm/index 注册、签名、PVM2 与未知模式拒绝通过；`run-protect-e2e.sh` 在 strict/PVM2 下完成双 DEX 基线、同签名覆盖安装首次启动、缓存启动和二次启动。macOS 下二进制 `grep` 的 locale 问题已在脚本中修正 |
-| 结论边界 | 图片 E2E 使用合成样本，未拿到 Issue #64 用户真实 APK；ARouter 真机证据为 Android 15 + 自建样本，Android 14 与真实业务 APK 尚未覆盖。两项均保持“已修复待验证” |
+| 结论边界 | 图片 E2E 使用合成样本，未拿到 Issue #64 用户真实 APK；ARouter 已在 Android 14 模拟器与 Android 15 真机上用自建样本通过，真实业务 APK 尚未覆盖。两项均保持“已修复待验证” |
 
-该结果证明代码路径和合成样本可完成重打包与 ARouter 路由恢复，不代表所有真实项目资源、所有 ARouter 版本或 Android 14 覆盖安装场景均已验证。
+该结果证明代码路径和合成样本可完成重打包与 ARouter 路由恢复，不代表所有真实项目资源、所有 ARouter 版本或真实业务 APK 覆盖安装场景均已验证。
 
 ## 5. 停止条件
 
