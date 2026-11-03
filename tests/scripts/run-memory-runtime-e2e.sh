@@ -154,7 +154,7 @@ state_contains() {
     local process_name="$1"
     local expected="$2"
     "${ADB[@]}" exec-out run-as "$PACKAGE_NAME" cat "$(state_path "$process_name")" \
-        | grep -aFq "$expected"
+        | LC_ALL=C grep -aFq "$expected"
 }
 
 trigger_memory_crash() {

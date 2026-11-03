@@ -18,11 +18,11 @@ import java.util.Base64;
 /** 无 Google 依赖；证明设备持有密钥，是否授权必须由客户服务端决定。 */
 final class ByosProof {
     static final String MODE = "device_approval";
-    static final int MIN_API = 26;
+    static final int MIN_API = 24;
 
     static AutoCloseable startupContext(Context ctx) throws Exception {
         if (android.os.Build.VERSION.SDK_INT >= 31) return null;
-        // API 26～30 的 AndroidKeyStore 在构造时读取全局 Application，
+        // API 24～30 的 AndroidKeyStore 在构造时读取全局 Application，
         // 此时框架尚未写入。仅在取钥期间借用已 attach 的壳，结束或超时后恢复。
         // ponytail: 旧系统依赖框架字段；字段不可访问时失败关闭，不退回可导出的软件密钥。
         Class<?> type = Class.forName("android.app.ActivityThread");
