@@ -5,6 +5,7 @@ import android.content.pm.ApplicationInfo;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.Set;
 
@@ -39,5 +40,36 @@ public class ARouterCompatTest {
     public void 可调试包保留提前注册路径() {
         assertTrue(ARouterCompat.shouldPreRegister(ApplicationInfo.FLAG_DEBUGGABLE));
         assertFalse(ARouterCompat.shouldPreRegister(0));
+    }
+
+    @Test
+    public void 覆盖安装或缓存缺失时也必须主动注册() {
+        assertTrue(ARouterCompat.shouldPreRegister(0, true, false));
+        assertTrue(ARouterCompat.shouldPreRegister(0, false, true));
+        assertFalse(ARouterCompat.shouldPreRegister(0, false, false));
+    }
+
+    @Test
+    public void 版本名或版本号任一变化都视为缓存失效() {
+        assertFalse(ARouterCompat.isVersionChanged(10, "1.10.0", 10, "1.10.0"));
+        assertTrue(ARouterCompat.isVersionChanged(11, "1.10.0", 10, "1.10.0"));
+        assertTrue(ARouterCompat.isVersionChanged(10, "1.10.1", 10, "1.10.0"));
+        assertTrue(ARouterCompat.isVersionChanged(10, null, 10, "1.10.0"));
+        assertTrue(ARouterCompat.isVersionChanged(10, "", 10, "1.10.0"));
+    }
+
+    @Test
+    public void 缓存与路由表一致时不刷新宿主缓存() {
+        assertFalse(ARouterCompat.shouldRefreshRouteCache(false, false));
+        assertTrue(ARouterCompat.shouldRefreshRouteCache(true, false));
+        assertTrue(ARouterCompat.shouldRefreshRouteCache(false, true));
+    }
+
+    @Test
+    public void 空路由缓存等同于缺失() {
+        assertTrue(ARouterCompat.isRouteCacheMissing(null));
+        assertTrue(ARouterCompat.isRouteCacheMissing(Collections.<String>emptySet()));
+        assertFalse(ARouterCompat.isRouteCacheMissing(
+                Collections.singleton("com.alibaba.android.arouter.routes.ARouter$$Root$$app")));
     }
 }

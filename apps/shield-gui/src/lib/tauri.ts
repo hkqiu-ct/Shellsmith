@@ -438,7 +438,7 @@ import type { SharingChoice, SharingInspection } from "./application-sharing-sta
 
 export type ByosProfile = { id: string; name: string; endpoint: string; authMode: "device_approval" | "play_integrity"; runtimeCert: string | null };
 export const byosRequirements = {
-  device_approval: { minSdk: 26, platform: "Android 8.0+" },
+  device_approval: { minSdk: 24, platform: "Android 7.0+" },
   play_integrity: { minSdk: 29, platform: "Android 10+" },
 } as const;
 export type ByosConnectionCheck = { code: string; elapsedMs: number; httpStatus: number | null };

@@ -100,6 +100,9 @@ public class StubApp extends Application {
                 }
             }
             Thread.currentThread().setContextClassLoader(loader);
+            // 覆盖安装后 versionCode 变化会让 ARouter 旧缓存失效。必须在任何
+            // ContentProvider/宿主 Application.onCreate 之前写入新缓存并注册路由。
+            ARouterCompat.prepareARouterRouteMap(this);
             realApp = makeRealApp(loader, base);
             TheRouterCompat.prepare(this);
         } catch (Exception e) {
