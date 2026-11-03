@@ -358,11 +358,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let manifest = "<manifest><application></application></manifest>";
         for (auth, required_api) in [
-            (crate::ByosAuth::DeviceApproval, 26),
+            (crate::ByosAuth::DeviceApproval, 24),
             (crate::ByosAuth::PlayIntegrity, 29),
         ] {
             for version in [
-                "19", "23", "25", "26", "27", "28", "invalid", "29", "30", "35",
+                "19", "23", "24", "25", "26", "27", "28", "invalid", "29", "30", "35",
             ] {
                 fs::write(
                     dir.path().join("apktool.yml"),

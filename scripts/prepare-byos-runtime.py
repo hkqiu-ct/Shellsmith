@@ -57,7 +57,7 @@ block = re.search(r'^dev\.mocika\.shield\.loader\.Ld -> [^\n]+:\n(.*?)(?=^[^ #\s
                   mapping.read_text(encoding='utf-8'), re.M | re.S)
 if not block:
     raise RuntimeError('BYOS R8 缺少 JNI 类映射')
-for method in ('s', 't', 'y', 'fetchRemoteIkm'):
+for method in ('s', 't', 'y', 'z', 'fetchRemoteIkm'):
     names = re.findall(r'\b' + method + r'\([^\n]*\)[^\n]* -> (\S+)', block[1])
     if not names or set(names) != {method}:
         raise RuntimeError('BYOS 固定 JNI 入口被删除或重命名：' + method)

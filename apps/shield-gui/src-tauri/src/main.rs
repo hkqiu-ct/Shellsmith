@@ -189,7 +189,7 @@ async fn protect_apk(
         .transpose()?;
     if byos.is_some() && matches!(request.runtime_mode, RuntimeMode::AndroidApi19) {
         return Err(
-            "BYOS 不能用于 Android 4.4 模式；设备授权要求 Android 8.0+，Play 授权要求 Android 10+"
+            "BYOS 不能用于 Android 4.4 模式；设备授权要求 Android 7.0+，Play 授权要求 Android 10+"
                 .into(),
         );
     }
