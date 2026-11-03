@@ -111,7 +111,7 @@ printf '%s\n' "$CHECK_RESULT" | grep -q '"already_protected":true'
 printf '%s\n' "$CHECK_RESULT" | grep -q '"is_signed":true'
 
 unzip -p "$FINAL" classes.dex > "$WORK/classes.dex"
-grep -a -q 'MSHD' "$WORK/classes.dex"
+LC_ALL=C grep -a -q 'MSHD' "$WORK/classes.dex"
 ARM64_STUB_LIBRARIES="$(unzip -Z1 "$FINAL" | awk '$0 ~ /^lib\/arm64-v8a\/libmodule[a-z]+\.so$/')"
 if [[ "$(printf '%s\n' "$ARM64_STUB_LIBRARIES" | awk 'NF { count++ } END { print count + 0 }')" != "1" ]]; then
   echo "arm64-v8a 目录未包含唯一的任务级 Native 别名库：" >&2
@@ -165,7 +165,7 @@ if [[ "${PVM2_STRICT_TEST:-0}" == "1" ]]; then
     exit 1
   fi
   unzip -p "$FINAL" assets/protector/mocika-sokeys.bin > "$WORK/mocika-sokeys.bin"
-  grep -a -q '^PSO2' "$WORK/mocika-sokeys.bin"
+  LC_ALL=C grep -a -q '^PSO2' "$WORK/mocika-sokeys.bin"
 fi
 
 if [ "$EXTRACT_NATIVE_LIBS" = "false" ]; then

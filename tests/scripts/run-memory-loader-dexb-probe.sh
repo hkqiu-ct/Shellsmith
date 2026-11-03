@@ -97,7 +97,7 @@ java -jar "$ROOT_DIR/tools/apksigner.jar" sign --ks "$GOOD_KEYSTORE" \
 cargo build --release -p shield-cli --manifest-path "$ROOT_DIR/Cargo.toml"
 "$ROOT_DIR/target/release/shield" protect --input "$PAYLOAD_SIGNED" --output "$PROTECTED_UNSIGNED"
 unzip -p "$PROTECTED_UNSIGNED" classes.dex > "$TEMP_DIR/final-assets/protected-payload.dex"
-grep -a -q 'MSHD' "$TEMP_DIR/final-assets/protected-payload.dex"
+LC_ALL=C grep -a -q 'MSHD' "$TEMP_DIR/final-assets/protected-payload.dex"
 
 MEMORY_PROBE_ASSETS="$TEMP_DIR/final-assets" \
 MEMORY_PROBE_NATIVE_LIBS="$ROOT_DIR/shield-stub/build/jniLibs" \
@@ -174,7 +174,7 @@ verify_split_installation() {
   local candidate dex_entry
   while IFS= read -r candidate; do
     while IFS= read -r dex_entry; do
-      if unzip -p "$candidate" "$dex_entry" | grep -aFq 'SplitMarker'; then
+      if unzip -p "$candidate" "$dex_entry" | LC_ALL=C grep -aFq 'SplitMarker'; then
         split_code_apk="$candidate"
         break 2
       fi

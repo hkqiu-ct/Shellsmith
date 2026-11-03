@@ -76,7 +76,7 @@ public final class Probe extends android.app.Instrumentation {
 }
 ''')
     (work / 'AndroidManifest.xml').write_text(f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{package}">
-<uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
+<uses-sdk android:minSdkVersion="21" android:targetSdkVersion="35"/>
 <application android:extractNativeLibs="true"/>
 <instrumentation android:name="{package}.Probe" android:targetPackage="{package}"/>
 </manifest>''')
@@ -84,7 +84,7 @@ public final class Probe extends android.app.Instrumentation {
         (work / name).mkdir()
     run(['javac', '--release', '8', '-cp', android, '-d', work / 'classes', work / 'Probe.java'])
     run(['jar', 'cf', work / 'classes.jar', '-C', work / 'classes', '.'])
-    run([bt / 'd8', '--lib', android, '--min-api', '26', '--output', work / 'dex', work / 'classes.jar'])
+    run([bt / 'd8', '--lib', android, '--min-api', '21', '--output', work / 'dex', work / 'classes.jar'])
     run([bt / 'aapt2', 'link', '-I', android, '--manifest', work / 'AndroidManifest.xml', '-o', work / 'probe.apk'])
     with zipfile.ZipFile(work / 'probe.apk', 'a') as apk:
         apk.writestr('classes.dex', dex)

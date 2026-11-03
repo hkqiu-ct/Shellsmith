@@ -71,6 +71,7 @@
     static native java.nio.ByteBuffer[] s(android.content.Context, byte[]);
     static native boolean t(android.content.Context, byte[]);
     static native void y(int);
+    static native byte[] z(byte[], int);
 }
 
 # BYOS 回调由 JNI 按稳定方法名调用；类名沿用现有构建映射。
