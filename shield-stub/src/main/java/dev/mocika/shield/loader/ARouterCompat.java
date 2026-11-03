@@ -26,13 +26,18 @@ public class ARouterCompat {
     private static final String CACHE_ROUTE_MAP = "ROUTER_MAP";
     private static final String CACHE_VERSION_NAME = "LAST_VERSION_NAME";
     private static final String CACHE_VERSION_CODE = "LAST_VERSION_CODE";
+    private static volatile boolean prepared;
 
     /**
-     * 从 assets/arouter_routes.txt 读取路由表类名并写入 ARouter 自有缓存。
+     * 从 assets/arouter_routes.rtap/.txt 读取路由表类名并写入 ARouter 自有缓存。
      * 路由表由 shield-cli 加固时静态扫描 DEX 生成，不依赖 DexFile API，兼容 API 21 及以上。
-     * 必须在宿主 Application.onCreate() 之前调用，让 ARouter.init() 按正常流程仅加载当前路由表一次。
+     * 必须在任何 ContentProvider / 宿主 Application.onCreate() 之前调用，确保覆盖安装后
+     * versionCode 变化时首次启动也能读到当前路由表。
      */
     public static void prepareARouterRouteMap(Context context) {
+        if (prepared) {
+            return;
+        }
         try {
             Class<?> logisticsCenterClass = Class.forName(
                     "com.alibaba.android.arouter.core.LogisticsCenter",
@@ -41,28 +46,49 @@ public class ARouterCompat {
 
             Set<String> routeClassNames = readRouteList(context);
             if (routeClassNames.isEmpty()) {
+                Log.i(TAG, "A07 routeCount=0");
                 return;
             }
 
             PackageInfo packageInfo = context.getPackageManager().getPackageInfo(
                     context.getPackageName(), 0);
-            SharedPreferences.Editor editor = context
-                    .getSharedPreferences(CACHE_NAME, Context.MODE_PRIVATE)
+            int versionCode = packageInfo.versionCode;
+            SharedPreferences preferences =
+                    context.getSharedPreferences(CACHE_NAME, Context.MODE_PRIVATE);
+            // 与 ARouter 的失效条件一致：版本号或版本名任一变化都要重新注册。
+            boolean versionChanged = isVersionChanged(
+                    versionCode,
+                    packageInfo.versionName,
+                    preferences.getInt(CACHE_VERSION_CODE, -1),
+                    preferences.getString(CACHE_VERSION_NAME, null));
+            boolean cacheMissing = isRouteCacheMissing(
+                    preferences.getStringSet(CACHE_ROUTE_MAP, null));
+            boolean preRegister = shouldPreRegister(
+                    context.getApplicationInfo().flags, versionChanged, cacheMissing);
+
+            SharedPreferences.Editor editor = preferences
                     .edit()
                     .putStringSet(CACHE_ROUTE_MAP, new LinkedHashSet<>(routeClassNames))
                     .putString(CACHE_VERSION_NAME, packageInfo.versionName)
-                    .putInt(CACHE_VERSION_CODE, packageInfo.versionCode);
+                    .putInt(CACHE_VERSION_CODE, versionCode);
 
             // ARouter.init() 紧接着读取缓存，必须同步落盘，不能使用异步 apply()。
             if (!editor.commit()) {
                 Log.w(TAG, "A01");
+                return;
             }
 
-            // 可调试包会忽略版本缓存并强制扫描 APK。加密 DEX 不在 sourceDir 中，
-            // 因此保留提前注册路径，避免首次安装或清除数据后路由表为空。
-            if (shouldPreRegister(context.getApplicationInfo().flags)) {
+            // 覆盖安装/清数据/调试包不能只依赖 ARouter 自己读缓存：
+            // 加密 DEX 不在 sourceDir 中，ARouter 扫描不到真实路由类。
+            if (preRegister) {
                 registerRoutes(logisticsCenterClass, routeClassNames);
             }
+            prepared = true;
+            Log.i(TAG, "A06 routeCount=" + routeClassNames.size()
+                    + " versionCode=" + versionCode
+                    + " versionChanged=" + versionChanged
+                    + " cacheMissing=" + cacheMissing
+                    + " preRegister=" + preRegister);
         } catch (ClassNotFoundException ignored) {
         } catch (PackageManager.NameNotFoundException e) {
             Log.w(TAG, "A02", e);
@@ -86,6 +112,28 @@ public class ARouterCompat {
 
     static boolean shouldPreRegister(int applicationFlags) {
         return (applicationFlags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+
+    /** 覆盖安装/清数据后缓存失效，也必须主动注册，不能只依赖 ARouter 扫描加密 APK。 */
+    static boolean shouldPreRegister(int applicationFlags, boolean versionChanged, boolean cacheMissing) {
+        return shouldPreRegister(applicationFlags) || versionChanged || cacheMissing;
+    }
+
+    /**
+     * ARouter 用版本名和版本号共同判断缓存是否有效；版本名为空时也会强制重新扫描。
+     * 加密 DEX 不在 sourceDir 中，扫描结果必为空，因此这里必须按同样条件预注册。
+     */
+    static boolean isVersionChanged(
+            int currentCode, String currentName, int cachedCode, String cachedName) {
+        return currentCode != cachedCode
+                || currentName == null
+                || currentName.isEmpty()
+                || !currentName.equals(cachedName);
+    }
+
+    /** ARouter 上一次扫描可能写入空集合；空集合等同于缓存缺失。 */
+    static boolean isRouteCacheMissing(Set<String> cachedRoutes) {
+        return cachedRoutes == null || cachedRoutes.isEmpty();
     }
 
     private static Set<String> readRouteList(Context context) {
