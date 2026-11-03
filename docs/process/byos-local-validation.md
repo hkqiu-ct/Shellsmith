@@ -173,3 +173,20 @@ ANDROID_HOME=/path/to/android-sdk python3 tests/scripts/check-runtime-jni.py \
 新产物首次请求后，服务器出现与启动时间一致的 `pending` 设备记录；用户批准该记录后，Android 15 ARM64 真机完成真实 HTTPS 取钥、载荷解密和业务 Activity 加载。首次加载约 3.206 秒，强制停止后使用已有 DEX 缓存再次启动约 2.710 秒，两个进程均未出现 JNI、取钥或未捕获启动异常，页面停留在应用自身的隐私政策确认界面。
 
 上述两次耗时仅为启动功能回归，不是性能统计验收；未代替用户同意隐私政策，未覆盖登录、录音等后续业务，也不代表 Play 或实际 KMS/HSM 联调通过。测试 APK、进程日志和页面截图保存在同一忽略目录；源码记录不包含服务凭据、完整 token 或设备公钥标识。
+
+## 2026-11-03：BYOS JNI `z` 混淆回归
+
+重建 BYOS 分发资源后，`check-runtime-jni.py` 在 HONOR Android 15 / arm64-v8a 上返回 `JNI_ERR`。根因是 `Ld.z` 属于 `JNI_OnLoad` 固定注册项，但 `proguard-rules.pro` 只钉住了 `s`、`t`、`y`、`fetchRemoteIkm`；独立 R8 本次把 `z` 改名为 `a`，`RegisterNatives` 找不到对应 native 方法后直接返回 `JNI_ERR`。标准 AGP 构建带有默认 native 保留规则，因此该问题只在 BYOS 独立 R8 路径暴露。
+
+修复内容：
+
+- 在 `shield-stub/proguard-rules.pro` 的 `-keepclassmembernames` 中钉住 `static native byte[] z(byte[], int)`。
+- 在 `prepare-byos-runtime.py` 的固定 JNI 入口检查中加入 `z`，后续映射缺失或重命名会在打包前失败。
+
+验证结果：
+
+- `make build-stub`、`make build-byos`、`make build-byos-play` 通过。
+- `resources.zip`、`resources-byos.zip`、`resources-byos-play.zip` 均在 HONOR Android 15 / arm64-v8a 上返回 `RUNTIME_JNI_OK`。
+- 修复前 `resources-byos.zip` 与 `resources-byos-play.zip` 均稳定复现 `JNI_ERR returned from JNI_OnLoad`。
+
+边界：本轮只验证 arm64-v8a 真机；armeabi-v7a、x86、x86_64 和 API 19 资源仍需对应设备或模拟器覆盖，不能由 arm64 通过外推。

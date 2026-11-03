@@ -236,6 +236,7 @@ cargo test -p mocika-shield 中文证书真实 -- --ignored --nocapture
 | ARouter 覆盖安装 | `attachBaseContext()` 在任何 ContentProvider/宿主 Application 前写入路由缓存；版本名、版本号任一变化或缓存缺失（含空集合）时主动注册全部路由；`onCreate` 保留幂等兜底。JVM 单测覆盖失效判定与空缓存 |
 | ARouter 真机回归 | HONOR BRP-AN00 / Android 15 / arm64-v8a：自建 ARouter 1.5.2 样本，未加固 v1 同签名覆盖安装加固 v2，首次启动 `versionChanged=true preRegister=true`，Fragment 与 Activity 路由均成功；将 `ROUTER_MAP` 置空并保持版本匹配后再次启动，`cacheMissing=true preRegister=true`，Fragment 路由仍成功 |
 | 路由与真机 E2E | `check-therouter-compat.py --serial ...` 的 asm/index 注册、签名、PVM2 与未知模式拒绝通过；`run-protect-e2e.sh` 在 strict/PVM2 下完成双 DEX 基线、同签名覆盖安装首次启动、缓存启动和二次启动。macOS 下二进制 `grep` 需 `LC_ALL=C`，相关脚本已修正 |
+| BYOS JNI 回归 | 重建 BYOS/Play 资源后发现 `Ld.z` 被独立 R8 改名为 `a`，`RegisterNatives` 失败导致 `JNI_ERR`；钉住 `z` 并把 `z` 加入打包前 JNI 检查后，标准、BYOS、Play 三套资源在 HONOR Android 15 / arm64-v8a 均返回 `RUNTIME_JNI_OK` |
 | 自动检查 | `cargo fmt --check`、Rust Clippy、`cargo test -p shield-core`、`cargo test -p shield-cli`、Stub Rust 32 项、Stub JVM 单测、维护脚本 45 项和 `make build-stub` 通过 |
 | 结论边界 | 图片 E2E 使用合成 WebP 样本，未拿到 Issue #64 用户真实 APK；ARouter 真机证据为 Android 15 + 自建样本，Android 14 与真实业务 APK 尚未覆盖。两项仍标为“已修复待验证” |
 
