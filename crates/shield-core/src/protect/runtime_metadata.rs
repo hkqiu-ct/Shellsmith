@@ -230,7 +230,7 @@ mod tests {
                 json.replace("\"byos_fetch_protocol\":2", "\"byos_fetch_protocol\":1"),
                 json.replace(
                     &format!("\"min_android_api\":{min_api}"),
-                    "\"min_android_api\":25",
+                    "\"min_android_api\":23",
                 ),
                 json.replace(
                     &format!("\"min_android_api\":{min_api}"),
@@ -240,7 +240,7 @@ mod tests {
                     &format!("\"min_android_api\":{min_api}"),
                     &format!(
                         "\"min_android_api\":{}",
-                        if min_api == 26 { 29 } else { 26 }
+                        if min_api == 24 { 29 } else { 24 }
                     ),
                 ),
             ] {

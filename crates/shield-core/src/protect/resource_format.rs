@@ -1,12 +1,51 @@
 use anyhow::{Context, Result};
 use std::fs;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use walkdir::WalkDir;
 use zip::{ZipArchive, ZipWriter};
 
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 const JPEG_SIGNATURE: [u8; 3] = [0xFF, 0xD8, 0xFF];
+const WEBP_RIFF: [u8; 4] = *b"RIFF";
+const WEBP_TAG: [u8; 4] = *b"WEBP";
+const GIF87A: [u8; 6] = *b"GIF87a";
+const GIF89A: [u8; 6] = *b"GIF89a";
+const BMP_SIGNATURE: [u8; 2] = *b"BM";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageKind {
+    Png,
+    Jpeg,
+    Webp,
+    Gif,
+    Bmp,
+    Empty,
+    Unknown,
+}
+
+impl ImageKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Jpeg => "JPEG",
+            Self::Webp => "WebP",
+            Self::Gif => "GIF",
+            Self::Bmp => "BMP",
+            Self::Empty => "空文件",
+            Self::Unknown => "未知格式",
+        }
+    }
+
+    fn target_extension(self) -> Option<&'static str> {
+        match self {
+            Self::Jpeg => Some("jpg"),
+            Self::Webp => Some("webp"),
+            _ => None,
+        }
+    }
+}
 
 /// 修正 Apktool 3 对空资源表的包信息及无资源表时遗漏的 Android 框架引用。
 pub(crate) fn normalize_empty_resource_metadata(apk_dir: &Path) -> Result<bool> {
@@ -137,11 +176,12 @@ fn resource_index<R: std::io::Read + std::io::Seek>(
     Ok(index)
 }
 
-/// 修正 aapt2 无法编译的“JPEG 内容伪装为 PNG”资源。
+/// 修正 aapt2 无法编译的“有效图片伪装为 .png”资源。
 ///
-/// 仅处理解包目录的 `res`，并通过改名保留原始 JPEG 字节；九宫格资源和同名目标
-/// 则拒绝处理，避免改变 Android 资源语义或覆盖用户文件。
-pub(crate) fn normalize_mislabeled_jpeg_resources(apk_dir: &Path) -> Result<usize> {
+/// 用户常见做法是把 JPEG/WebP 手动改名为 `.png`。图片查看器能打开，但 aapt2
+/// 会按 PNG 签名解析并失败。这里只处理 `res/drawable*`、`res/mipmap*`，通过
+/// 改名保留原始字节；九宫格、同名目标和未知格式拒绝处理，避免改变资源语义。
+pub(crate) fn normalize_mislabeled_image_resources(apk_dir: &Path) -> Result<usize> {
     let resource_dir = apk_dir.join("res");
     if !resource_dir.is_dir() {
         return Ok(0);
@@ -151,37 +191,64 @@ pub(crate) fn normalize_mislabeled_jpeg_resources(apk_dir: &Path) -> Result<usiz
     for entry in WalkDir::new(&resource_dir).follow_links(false) {
         let entry =
             entry.with_context(|| format!("遍历资源目录失败：{}", resource_dir.display()))?;
-        if entry.file_type().is_file() && is_png_extension(entry.path()) {
+        if entry.file_type().is_file()
+            && is_png_extension(entry.path())
+            && is_drawable_or_mipmap(entry.path(), &resource_dir)
+        {
             png_paths.push(entry.into_path());
         }
     }
 
     let mut renamed = 0;
+    let mut errors = Vec::<String>::new();
     for path in png_paths {
-        if !has_jpeg_signature(&path)? {
+        let kind = detect_image_kind(&path)?;
+        if kind == ImageKind::Png {
             continue;
         }
+        let relative = path
+            .strip_prefix(apk_dir)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
         if is_nine_patch(&path) {
-            anyhow::bail!(
-                "检测到 JPEG 内容伪装为九宫格 PNG，无法安全自动修正：{}。请改为有效 .9.png 资源",
-                path.display()
-            );
+            errors.push(format!(
+                "{relative}: 九宫格 .9.png 实际为 {}，必须改为有效 PNG",
+                kind.label()
+            ));
+            continue;
         }
-        let target = path.with_extension("jpg");
+        let Some(extension) = kind.target_extension() else {
+            errors.push(format!(
+                "{relative}: 实际为 {}，无法安全自动修正；请改为有效 PNG/JPEG/WebP",
+                kind.label()
+            ));
+            continue;
+        };
+        let target = path.with_extension(extension);
         if target.exists() {
-            anyhow::bail!(
-                "检测到 JPEG 内容伪装为 PNG，但同名 .jpg 已存在：{}。请手动处理资源冲突",
-                target.display()
-            );
+            errors.push(format!(
+                "{relative}: 实际为 {}，但同名 .{extension} 已存在；请手动处理资源冲突",
+                kind.label()
+            ));
+            continue;
         }
         fs::rename(&path, &target).with_context(|| {
             format!(
-                "将 JPEG 伪装 PNG 资源改名失败：{} -> {}",
+                "将 {} 伪装 PNG 资源改名失败：{} -> {}",
+                kind.label(),
                 path.display(),
                 target.display()
             )
         })?;
         renamed += 1;
+    }
+    if !errors.is_empty() {
+        anyhow::bail!(
+            "检测到 {} 个 .png 资源内容不是 PNG：\n{}",
+            errors.len(),
+            errors.join("\n")
+        );
     }
     Ok(renamed)
 }
@@ -192,13 +259,53 @@ fn is_png_extension(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
 }
 
+fn is_drawable_or_mipmap(path: &Path, resource_dir: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(resource_dir) else {
+        return false;
+    };
+    let Some(first) = relative
+        .components()
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+    else {
+        return false;
+    };
+    first == "drawable"
+        || first.starts_with("drawable-")
+        || first == "mipmap"
+        || first.starts_with("mipmap-")
+}
+
 fn is_nine_patch(path: &Path) -> bool {
     path.file_stem()
         .and_then(|stem| stem.to_str())
         .is_some_and(|stem| stem.ends_with(".9"))
 }
 
-fn has_jpeg_signature(path: &Path) -> Result<bool> {
-    let bytes = fs::read(path).with_context(|| format!("读取资源文件失败：{}", path.display()))?;
-    Ok(bytes.starts_with(&JPEG_SIGNATURE))
+fn detect_image_kind(path: &Path) -> Result<ImageKind> {
+    let mut file =
+        fs::File::open(path).with_context(|| format!("读取资源文件失败：{}", path.display()))?;
+    let mut prefix = [0u8; 12];
+    let read = file
+        .read(&mut prefix)
+        .with_context(|| format!("读取资源文件头失败：{}", path.display()))?;
+    if read == 0 {
+        return Ok(ImageKind::Empty);
+    }
+    if read >= PNG_SIGNATURE.len() && prefix[..PNG_SIGNATURE.len()] == PNG_SIGNATURE {
+        return Ok(ImageKind::Png);
+    }
+    if read >= JPEG_SIGNATURE.len() && prefix[..JPEG_SIGNATURE.len()] == JPEG_SIGNATURE {
+        return Ok(ImageKind::Jpeg);
+    }
+    if read >= 12 && prefix[..4] == WEBP_RIFF && prefix[8..12] == WEBP_TAG {
+        return Ok(ImageKind::Webp);
+    }
+    if read >= 6 && (prefix[..6] == GIF87A || prefix[..6] == GIF89A) {
+        return Ok(ImageKind::Gif);
+    }
+    if read >= 2 && prefix[..2] == BMP_SIGNATURE {
+        return Ok(ImageKind::Bmp);
+    }
+    Ok(ImageKind::Unknown)
 }

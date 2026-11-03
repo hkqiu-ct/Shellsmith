@@ -26,7 +26,7 @@ android {
 
     defaultConfig {
         // 保留 API 19～20 的 Dalvik 分支；正式兼容资源仍使用独立的 r25c Native 库。
-        minSdk = if (byosPlay) 29 else if (byosRuntime) 26 else 19
+        minSdk = if (byosPlay) 29 else if (byosRuntime) 24 else 19
 
         testInstrumentationRunner = if (byosRuntime && !byosPlay) "dev.mocika.shield.loader.ByosDeviceContractTest" else "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
@@ -56,6 +56,7 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = byosRuntime
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
@@ -111,6 +112,7 @@ tasks.named("preBuild") {
 }
 
 dependencies {
+    if (byosRuntime) coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     if (byosPlay) implementation("com.google.android.play:integrity:1.4.0")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.junit)

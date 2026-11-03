@@ -13,7 +13,7 @@ pub enum ByosAuth {
 impl ByosAuth {
     pub fn min_android_api(self) -> u32 {
         match self {
-            Self::DeviceApproval => 26,
+            Self::DeviceApproval => 24,
             Self::PlayIntegrity => 29,
         }
     }

@@ -20,7 +20,6 @@ import java.security.cert.Certificate;
 import java.security.spec.MGF1ParameterSpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.HashSet;
 import java.util.Set;
 import javax.crypto.Cipher;
@@ -125,7 +124,7 @@ public class ByosDeviceContractTest extends Instrumentation {
             }
         } : null);
         denied(context); // 未批准的新设备不能获取密钥。
-        approvedKey = Base64.getEncoder().encodeToString(device.getPublic().getEncoded());
+        approvedKey = encode(device.getPublic().getEncoded());
         assertArrayEquals(ikm, ByosKeyClient.fetch(context, ENDPOINT, "test-token", CERT));
         assertStartupReleased();
         assertFalse(last.has("integrity_token"));
@@ -152,6 +151,22 @@ public class ByosDeviceContractTest extends Instrumentation {
         }
     }
 
+    private static String encode(byte[] bytes) {
+        return android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
+    }
+
+    private static String encodeUrl(byte[] bytes) {
+        return android.util.Base64.encodeToString(
+                bytes,
+                android.util.Base64.URL_SAFE
+                        | android.util.Base64.NO_WRAP
+                        | android.util.Base64.NO_PADDING);
+    }
+
+    private static byte[] decode(String value) {
+        return android.util.Base64.decode(value, android.util.Base64.DEFAULT);
+    }
+
     private JSONObject serve(JSONObject request) throws Exception {
         assertEquals("device_approval", request.getString("auth_mode"));
         assertEquals(2, request.getInt("fetch_protocol"));
@@ -160,21 +175,21 @@ public class ByosDeviceContractTest extends Instrumentation {
         byte[] digest = ByosKeyClient.nonceDigest(ENDPOINT, "test-token", request.getString("package_name"), CERT,
                 request.getLong("timestamp"), request.getString("request_id"), "device_approval",
                 request.getString("response_public_key"), request.getString("device_public_key"));
-        assertEquals(Base64.getUrlEncoder().withoutPadding().encodeToString(digest), request.getString("nonce"));
-        PublicKey publicKey = KeyFactory.getInstance("EC").generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(request.getString("device_public_key"))));
+        assertEquals(encodeUrl(digest), request.getString("nonce"));
+        PublicKey publicKey = KeyFactory.getInstance("EC").generatePublic(new X509EncodedKeySpec(decode(request.getString("device_public_key"))));
         Signature signature = Signature.getInstance("SHA256withECDSA"); signature.initVerify(publicKey); signature.update(digest);
-        assertTrue(signature.verify(Base64.getDecoder().decode(request.getString("device_signature"))));
+        assertTrue(signature.verify(decode(request.getString("device_signature"))));
         if (!request.getString("device_public_key").equals(approvedKey) || !consumed.add(request.getString("nonce"))) return null;
         byte[] plaintext = new byte[64]; System.arraycopy(digest, 0, plaintext, 0, 32); System.arraycopy(ikm, 0, plaintext, 32, 32);
         Cipher wrapper = Cipher.getInstance("RSA/ECB/OAEPPadding");
-        wrapper.init(Cipher.ENCRYPT_MODE, KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(request.getString("response_public_key")))),
+        wrapper.init(Cipher.ENCRYPT_MODE, KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(decode(request.getString("response_public_key")))),
                 new OAEPParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT));
         byte[] ciphertext = wrapper.doFinal(plaintext);
         if ("cipher".equals(failure)) ciphertext[50] ^= 1;
         JSONObject response = new JSONObject().put("fetch_protocol", 2).put("auth_mode", "mode".equals(failure) ? "play_integrity" : "device_approval")
                 .put("token_id", "test-token").put("nonce", "nonce".equals(failure) ? "wrong" : request.getString("nonce"))
-                .put("wrapped_ikm", Base64.getEncoder().encodeToString(ciphertext));
-        if ("raw".equals(failure)) response.put("ikm", Base64.getEncoder().encodeToString(ikm));
+                .put("wrapped_ikm", encode(ciphertext));
+        if ("raw".equals(failure)) response.put("ikm", encode(ikm));
         return response;
     }
 }
