@@ -22,7 +22,7 @@
 | Issue | 分类 | 融合项目处理方式 | 当前状态 | 现有证据 | 完成条件 |
 |---|---|---|---|---|---|
 | #64 PNG 签名不符导致重打包失败 | P0 兼容性 | 批量识别 `res/drawable*`、`res/mipmap*` 下伪装为 `.png` 的 JPEG/WebP，按实际格式无损改名；GIF/BMP/未知/空文件、九宫格和同名目标明确失败 | 已修复待验证 | 11 项资源格式单测通过；合成 WebP 伪装 PNG APK 完成加固重打包 | 用户真实 APK 重打包成功，并在目标设备安装启动通过 |
-| #63 覆盖安装后 ARouter Fragment 为空 | P0 回归 | 在 `attachBaseContext()` 提前写入路由缓存；版本名/版本号变化或缓存缺失（含空集合）时主动注册全部路由；`onCreate` 保留幂等兜底 | 已修复待验证 | JVM 单测覆盖版本失效、空缓存和预注册判定；`make build-stub` 与 Stub 单测通过 | Android 14 真机以相同或升级 versionCode 覆盖安装，首次启动恢复 Fragment 并完成跨模块路由 |
+| #63 覆盖安装后 ARouter Fragment 为空 | P0 回归 | 在 `attachBaseContext()` 提前写入路由缓存；版本名/版本号变化或缓存缺失（含空集合）时主动注册全部路由；`onCreate` 保留幂等兜底 | 已修复待验证 | JVM 单测覆盖版本失效、空缓存和预注册判定；Android 15 真机用真实 ARouter 1.5.2 样本完成升级覆盖安装（`versionChanged=true`）和空缓存（`cacheMissing=true`）后的 Fragment/Activity 路由验证；`make build-stub` 与 Stub 单测通过 | Android 14 真机与真实业务 APK 覆盖安装首次启动恢复 Fragment |
 | #129 Windows 找不到 keytool | P1 工具发现 | 除 PATH/JAVA_HOME 外，从已发现的 java.exe 同目录解析 keytool.exe | 已修复待验证 | 新增同目录解析单测；未在 Windows JDK 11 复现 | Windows 11/JDK 11 诊断与证书 Alias 查询通过 |
 | #121 Fedora AppImage 窗口空白 | P1 桌面兼容 | Linux 启动时在用户未显式配置时设置 `WEBKIT_DISABLE_DMABUF_RENDERER=1`，规避 WebKitGTK DMABUF 渲染空白 | 已修复待验证 | Tauri 后端编译与测试通过；缺 Fedora 发布包实机 | Fedora 安装/启动、空白窗口回归与日志定位通过 |
 | #117 dex2oat 缓存 | P0 回归 | 允许 oat/odex 目录存在，不将系统优化结果误判为污染 | 已修复待验证 | 缓存/运行时单元测试通过 | API26+ 二次启动不重复清缓存 |
