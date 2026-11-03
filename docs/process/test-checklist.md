@@ -227,6 +227,16 @@ cargo test -p mocika-shield 中文证书真实 -- --ignored --nocapture
 
 ## 关键改动验证记录
 
+### 2026-11-03：1.10.0 图片兼容与 ARouter 覆盖安装回归
+
+| 项 | 结果 |
+|----|------|
+| 图片格式归一化 | `res/drawable*`、`res/mipmap*` 下 JPEG/WebP 内容伪装 `.png` 时按实际格式改名；GIF/BMP/未知/空文件、九宫格和同名目标明确失败；`res/raw` 不改动。资源格式 11 项单测通过 |
+| 图片重打包 E2E | 用 smoke APK 将 `res/6C.png` 替换为 WebP 字节后执行加固，日志出现“已修正 1 个非 PNG 内容伪装 .png 的资源文件”，重打包、对齐和完成阶段均通过；输出按原资源恢复策略保留原始条目 |
+| ARouter 覆盖安装 | `attachBaseContext()` 在任何 ContentProvider/宿主 Application 前写入路由缓存；版本名、版本号任一变化或缓存缺失（含空集合）时主动注册全部路由；`onCreate` 保留幂等兜底。JVM 单测覆盖失效判定与空缓存 |
+| 自动检查 | `cargo fmt --check`、Rust Clippy、`cargo test -p shield-core`、`cargo test -p shield-cli`、Stub Rust 32 项、Stub JVM 单测、维护脚本 45 项和 `make build-stub` 通过 |
+| 结论边界 | 图片 E2E 使用合成 WebP 样本，未拿到 Issue #64 用户真实 APK；ARouter 尚无 Android 14 真机同版本/升级覆盖安装与 Fragment 恢复证据。两项均标为“已修复待验证” |
+
 ### 2026-09-24：LLVM Native VMP 与延迟 Play Delivery 本地闭环
 
 | 项 | 结果 |
