@@ -237,6 +237,7 @@ cargo test -p mocika-shield 中文证书真实 -- --ignored --nocapture
 | ARouter 真机回归 | HONOR BRP-AN00 / Android 15 / arm64-v8a 与 API 34 / Android 14 / arm64-v8a 模拟器：自建 ARouter 1.5.2 样本，未加固 v1 同签名覆盖安装加固 v2，首次启动 `versionChanged=true preRegister=true`，Fragment 与 Activity 路由均成功；将 `ROUTER_MAP` 置空并保持版本匹配后再次启动，`cacheMissing=true preRegister=true`，Fragment 路由仍成功 |
 | 路由与真机 E2E | `check-therouter-compat.py --serial ...` 的 asm/index 注册、签名、PVM2 与未知模式拒绝通过；`run-protect-e2e.sh` 在 strict/PVM2 下完成双 DEX 基线、同签名覆盖安装首次启动、缓存启动和二次启动。macOS 下二进制 `grep` 需 `LC_ALL=C`，相关脚本已修正 |
 | BYOS JNI 回归 | 重建 BYOS/Play 资源后发现 `Ld.z` 被独立 R8 改名为 `a`，`RegisterNatives` 失败导致 `JNI_ERR`；钉住 `z` 并把 `z` 加入打包前 JNI 检查后，标准、BYOS、Play 三套资源在 HONOR Android 15 / arm64-v8a 均返回 `RUNTIME_JNI_OK` |
+| BYOS API 24 | 设备授权最低输入版本降至 `minSdkVersion 24`；BYOS 变体开启 core library desugaring 解决 `java.util.Base64` 的 API 26 依赖。Android 15 真机与 API 24 / Android 7.0 arm64 模拟器的设备合同测试均通过；标准、BYOS、Play 资源在 Android 15 通过 JNI 检查，标准与 BYOS 在 API 24 通过 |
 | 自动检查 | `cargo fmt --check`、Rust Clippy、`cargo test -p shield-core`、`cargo test -p shield-cli`、Stub Rust 32 项、Stub JVM 单测、维护脚本 45 项和 `make build-stub` 通过 |
 | 结论边界 | 图片 E2E 使用合成 WebP 样本，未拿到 Issue #64 用户真实 APK；ARouter 已在 Android 14 模拟器与 Android 15 真机上用自建样本通过，真实业务 APK 尚未覆盖。两项仍标为“已修复待验证” |
 

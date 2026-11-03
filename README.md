@@ -37,7 +37,7 @@ BYOS（Bring Your Own Server）把产物 IKM 从 APK 中移出，适合需要自
 
 | 方式 | 适用场景 | 要求 |
 |---|---|---|
-| `device_approval` | 国内、侧载、自有分发 | 设备 EC P-256 公钥登记，管理员批准；Android 8.0+（`minSdk 26`） |
+| `device_approval` | 国内、侧载、自有分发 | 设备 EC P-256 公钥登记，管理员批准；Android 7.0+（`minSdk 24`） |
 | `play_integrity` | Google Play 分发 | Play Console 与 Google Cloud 服务账号；Android 10+（`minSdk 29`） |
 
 两种方式都不会在失败时回退到离线加载。未知设备只登记为待批准并拒绝；Play 证明失败也不会切换到设备授权。

@@ -18,7 +18,7 @@ $byosPlay = $byosRuntime -and $env:MOCIKA_BYOS_PLAY_INTEGRITY -eq "1"
 $buildName = if ($byosPlay) { "build-byos-play" } elseif ($byosRuntime) { "build-byos" } else { "build" }
 $stubBuildDir = Join-Path $ProjectRoot "shield-stub\$buildName"
 $OutputDir = Join-Path $stubBuildDir "outputs\resources"
-$runtimeMinApi = if ($byosPlay) { 29 } elseif ($byosRuntime) { 26 } else { 21 }
+$runtimeMinApi = if ($byosPlay) { 29 } elseif ($byosRuntime) { 24 } else { 21 }
 $byosAuth = if ($byosPlay) { "play_integrity" } elseif ($byosRuntime) { "device_approval" } else { "none" }
 $byosJson = $byosRuntime.ToString().ToLowerInvariant()
 

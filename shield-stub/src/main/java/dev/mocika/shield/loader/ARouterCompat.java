@@ -61,10 +61,18 @@ public class ARouterCompat {
                     packageInfo.versionName,
                     preferences.getInt(CACHE_VERSION_CODE, -1),
                     preferences.getString(CACHE_VERSION_NAME, null));
-            boolean cacheMissing = isRouteCacheMissing(
-                    preferences.getStringSet(CACHE_ROUTE_MAP, null));
+            Set<String> cachedRoutes = preferences.getStringSet(CACHE_ROUTE_MAP, null);
+            boolean cacheMissing = isRouteCacheMissing(cachedRoutes);
+            boolean routesChanged = !routeClassNames.equals(cachedRoutes);
             boolean preRegister = shouldPreRegister(
                     context.getApplicationInfo().flags, versionChanged, cacheMissing);
+            // 正常使用中的 ARouter 缓存与当前路由表一致时不做任何写入，
+            // 避免加固壳反复改宿主缓存；只有版本失效、缓存缺失或路由表变化才刷新。
+            if (!shouldRefreshRouteCache(preRegister, routesChanged)) {
+                prepared = true;
+                Log.i(TAG, "A08 routeCount=" + routeClassNames.size() + " cacheCurrent=true");
+                return;
+            }
 
             SharedPreferences.Editor editor = preferences
                     .edit()
@@ -129,6 +137,11 @@ public class ARouterCompat {
                 || currentName == null
                 || currentName.isEmpty()
                 || !currentName.equals(cachedName);
+    }
+
+    /** 缓存与当前路由表一致时保持宿主原状；只有需要修复时才写缓存或预注册。 */
+    static boolean shouldRefreshRouteCache(boolean preRegister, boolean routesChanged) {
+        return preRegister || routesChanged;
     }
 
     /** ARouter 上一次扫描可能写入空集合；空集合等同于缓存缺失。 */

@@ -15,7 +15,7 @@ for filename, mode, play in [('resources.zip', None, False), ('resources-byos.zi
         assert bool(metadata.get('byos_remote_key')) == bool(mode), filename
         if mode:
             assert metadata['byos_auth'] == mode and metadata['byos_fetch_protocol'] == 2, filename
-            assert metadata['min_android_api'] == (29 if play else 26), filename
+            assert metadata['min_android_api'] == (29 if play else 24), filename
         assert (b'com.google.android.play.core.integrityservice.BIND_INTEGRITY_SERVICE' in dex) == play, filename
         assert b'Lcom/google/android/' not in dex, filename
         for abi in ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'):

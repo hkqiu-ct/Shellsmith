@@ -10,7 +10,7 @@ BYOS 的 DEXB v7 从 APK 移除 IKM 包裹字段；每次进程加载必须经�
 
 ## 实施时修正的约束
 
-- **系统范围**：设备授权要求输入 APK minSdkVersion >= 26。API 26～30 的 AndroidKeyStore 依赖全局 Application，取钥期间暂时提供已 attach 的壳 Application，成功、拒绝、超时均恢复原状态；字段不可访问时失败关闭。Play SDK 1.4.0 自身要求 API 23，但壳的同步启动路径使用 API 29 的公开服务绑定 Executor，避免主线程等待与服务连接回调互锁，所以 Play 模式仍要求 minSdkVersion >= 29。默认离线兼容范围不变。
+- **系统范围**：设备授权要求输入 APK minSdkVersion >= 24。API 24～30 的 AndroidKeyStore 依赖全局 Application，取钥期间暂时提供已 attach 的壳 Application，成功、拒绝、超时均恢复原状态；字段不可访问时失败关闭。Play SDK 1.4.0 自身要求 API 23，但壳的同步启动路径使用 API 29 的公开服务绑定 Executor，避免主线程等待与服务连接回调互锁，所以 Play 模式仍要求 minSdkVersion >= 29。默认离线兼容范围不变。
 - **请求绑定**：随机 request_id 与端点、token、包名、证书、时间、授权方式和两份公钥一起哈希为 nonce；服务端验证设备签名及批准记录，或 Google 解码结果，并原子消费 nonce。
 - **信任来源**：API key 只用于构建注册，必须由服务端预先绑定应用、最终签名、授权方式及发布策略。手机自报身份不能成为放行依据。
 - **密钥来源**：BYOS 每次构建独立随机生成 32 字节 IKM，不由本机项目种子派生，不进入项目备份或报告。客户服务可适配自己的密钥库/KMS/HSM 封存 IKM，账号/签名/许可证用于授权；这些材料不能直接替代产物 IKM。构建机内存仍会持有当次 IKM。
