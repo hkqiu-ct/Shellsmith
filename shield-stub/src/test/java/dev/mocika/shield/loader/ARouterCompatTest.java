@@ -59,6 +59,13 @@ public class ARouterCompatTest {
     }
 
     @Test
+    public void 缓存与路由表一致时不刷新宿主缓存() {
+        assertFalse(ARouterCompat.shouldRefreshRouteCache(false, false));
+        assertTrue(ARouterCompat.shouldRefreshRouteCache(true, false));
+        assertTrue(ARouterCompat.shouldRefreshRouteCache(false, true));
+    }
+
+    @Test
     public void 空路由缓存等同于缺失() {
         assertTrue(ARouterCompat.isRouteCacheMissing(null));
         assertTrue(ARouterCompat.isRouteCacheMissing(Collections.<String>emptySet()));

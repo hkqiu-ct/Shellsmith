@@ -122,7 +122,7 @@ BYOS 不再使用本机项目种子派生产物 IKM，每次构建由密码学�
 
 ## 2026-10-21：按授权方式拆分最低系统要求
 
-设备授权最低输入版本改为 `minSdkVersion >= 26`（Android 8.0）；Play 模式保留 `>= 29`（Android 10），原因是当前同步启动路径使用 API 29 的服务绑定 Executor，并非 Google SDK 本身要求 API 29。此前记录的统一 API 29 门槛已被本节取代。
+设备授权最低输入版本改为 `minSdkVersion >= 26`（Android 8.0，后于 2026-11-03 调整为 API 24）；Play 模式保留 `>= 29`（Android 10），原因是当前同步启动路径使用 API 29 的服务绑定 Executor，并非 Google SDK 本身要求 API 29。此前记录的统一 API 29 门槛已被本节取代。
 
 同时修复设备授权的早期启动问题：API 26～30 的 AndroidKeyStore 构造依赖全局 Application，但壳在 `attachBaseContext` 取钥时框架尚未填入。取钥期间临时提供已经 attach 的壳 Application；成功、拒绝、超时和异常结束均恢复原状态，不覆盖已有 Application。API 31 以上不进入该兼容分支。旧系统框架字段不可访问时拒绝启动，不改用软件设备密钥。依据可查 [Android 8.0 KeyStore 实现](https://android.googlesource.com/platform/frameworks/base/+/android-8.0.0_r1/keystore/java/android/security/KeyStore.java)。
 
@@ -190,3 +190,22 @@ ANDROID_HOME=/path/to/android-sdk python3 tests/scripts/check-runtime-jni.py \
 - 修复前 `resources-byos.zip` 与 `resources-byos-play.zip` 均稳定复现 `JNI_ERR returned from JNI_OnLoad`。
 
 边界：本轮只验证 arm64-v8a 真机；armeabi-v7a、x86、x86_64 和 API 19 资源仍需对应设备或模拟器覆盖，不能由 arm64 通过外推。
+
+## 2026-11-03：设备授权最低版本降至 API 24
+
+设备授权最低输入版本从 `minSdkVersion >= 26` 调整为 `>= 24`（Android 7.0）；Play 模式保持 `>= 29`。直接原因是 `ByosKeyClient` 和 `ByosProof` 使用 `java.util.Base64`（API 26 才加入 Android），在 API 24/25 上会触发 `NoClassDefFoundError`。BYOS 变体已开启 core library desugaring（`desugar_jdk_libs 2.1.5`），运行时继续使用标准 Java API，宿主 JVM 单测不受影响。
+
+同步修改：
+
+- `ByosProof.MIN_API` 改为 24，启动上下文兼容分支覆盖 API 24～30。
+- `shield-stub` 的 BYOS 变体 `minSdk` 改为 24；`resources-byos.zip` 的 `min_android_api` 为 24，Play 资源仍为 29。
+- `scripts/build-stub.sh`、`build-stub.ps1`、CLI/GUI 的 BYOS 门槛同步为 Android 7.0+。
+- `check-byos-resources.py` 和 `check-runtime-jni.py` 的最低版本断言同步调整。
+
+验证结果：
+
+- Android 15 / HONOR BRP-AN00 / arm64-v8a 真机：BYOS 设备合同测试 `Tests: 1, failures: 0`。
+- API 24 / Android 7.0 / arm64-v8a 模拟器：同一设备合同测试通过。
+- 标准、BYOS、Play 三套资源在 Android 15 真机 JNI 探针均返回 `RUNTIME_JNI_OK`；标准与 BYOS 资源在 API 24 模拟器也返回 `RUNTIME_JNI_OK`。
+
+边界：API 24 使用模拟器，尚未覆盖真实 Android 7 设备；API 25 未单独执行；Play 模式仍要求 API 29 及以上。
