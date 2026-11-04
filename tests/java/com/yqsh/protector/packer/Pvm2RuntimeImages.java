@@ -137,5 +137,14 @@ public final class Pvm2RuntimeImages {
             Files.write(Path.of(args[0], "image" + index + ".gcm"),
                     com.yqsh.protector.packer.util.CryptoUtils.aesGcmEncrypt(new byte[16], result.image));
         }
+        // const-wide/32 的负立即数必须符号扩展到 64 位；回归 Integer.MIN_VALUE 边界。
+        Code wide = new Code(1, 0, 0, 0, new short[]{0x0017, 0x0000, (short) 0x8000, 0x0010},
+                new Code.Try[0], new Code.CatchHandler[0]);
+        var wideResult = Pvm2Compiler.tryCompile(null, wide, "J", true,
+                Pvm2Morph.fromIsa(0, new SecureRandom()), true);
+        if (!wideResult.isOk()) throw new AssertionError("const-wide/32: " + wideResult.failReason);
+        Files.write(Path.of(args[0], "image90.bin"), wideResult.image);
+        Files.write(Path.of(args[0], "image90.gcm"),
+                com.yqsh.protector.packer.util.CryptoUtils.aesGcmEncrypt(new byte[16], wideResult.image));
     }
 }

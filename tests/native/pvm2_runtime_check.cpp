@@ -99,8 +99,8 @@ int main(int argc, char** argv) {
     assert(written == 123 && std::all_of(std::begin(boundary), std::end(boundary), [](uint8_t c) { return c == 0xa5; }));
     const auto plain = image();
     std::vector<uint8_t> code;
-    u16(code, 4); u16(code, 1); u32(code, 8); u32(code, 2); u16(code, argc > 1 && std::string(argv[1]) != "block-before-init" ? 188 : 98);
-    for (int i = 0; i < (argc > 1 && std::string(argv[1]) != "block-before-init" ? 188 : 98); i++) {
+    u16(code, 4); u16(code, 1); u32(code, 8); u32(code, 2); u16(code, argc > 1 && std::string(argv[1]) != "block-before-init" ? 189 : 98);
+    for (int i = 0; i < (argc > 1 && std::string(argv[1]) != "block-before-init" ? 189 : 98); i++) {
         auto bytes = plain;
         if (i >= 98) {
             std::ifstream input(std::string(argv[1]) + "/image" + std::to_string(i - 98) + ".bin", std::ios::binary);
@@ -204,6 +204,11 @@ int main(int argc, char** argv) {
     assert(JNI_CreateJavaVM(&jvm, reinterpret_cast<void**>(&env), &args) == JNI_OK);
     jobject result = interpret(env, 2, 0, nullptr);
     assert(result && !env->ExceptionCheck());
+    jobject wideResult = interpret(env, 2, 188, nullptr);
+    assert(wideResult && !env->ExceptionCheck());
+    jclass longCls = env->FindClass("java/lang/Long");
+    assert(env->CallLongMethod(wideResult, env->GetMethodID(longCls, "longValue", "()J")) == -2147483648LL);
+    env->DeleteLocalRef(wideResult);
     auto check_error = [&](const char* type, const char* message) {
         assert(env->ExceptionCheck());
         jthrowable error = env->ExceptionOccurred(); env->ExceptionClear();

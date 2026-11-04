@@ -416,8 +416,10 @@ public final class Pvm2Compiler {
                 return 2;
             }
             case 0x17: {
-                long imm = (units[pc + 1] & 0xffffL) | ((units[pc + 2] & 0xffffL) << 16);
-                emits.add(Emit.const64((u0 >> 8) & 0xff, imm));
+                // const-wide/32 的 32 位立即数必须按有符号 int 扩展到 long；
+                // 否则 -2147483648 会变成 +2147483648，Integer.MIN_VALUE 边界判断会失败。
+                int imm32 = (units[pc + 1] & 0xffff) | ((units[pc + 2] & 0xffff) << 16);
+                emits.add(Emit.const64((u0 >> 8) & 0xff, imm32));
                 return 3;
             }
             case 0x18: { // const-wide
