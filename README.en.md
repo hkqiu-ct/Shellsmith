@@ -2,7 +2,7 @@
   <img src="docs/assets/brand/shellsmith-icon.png" width="96" alt="Shellsmith logo">
   <h1>Shellsmith</h1>
   <p><strong>Android and iOS App Hardening</strong></p>
-  <p>Local-first · Offline hardening · Integrated signing</p>
+  <p>Offline &amp; online keys · Android &amp; iOS hardening · Integrated signing</p>
   <p><a href="README.md">简体中文</a> | English</p>
   <p>
     <a href="https://github.com/kairowan/Shellsmith/releases/latest"><img src="https://img.shields.io/github/v/release/kairowan/Shellsmith?style=flat-square&label=release&color=6366f1" alt="Latest release"></a>
@@ -11,19 +11,21 @@
   </p>
 </div>
 
-Shellsmith is a local-first desktop hardening tool. It protects Android APK/AAB outputs and iOS source projects, signs them, and verifies the results entirely on your machine; APKs, certificates, and signing materials are never uploaded. When BYOS out-of-package keys are explicitly enabled, the artifact IKM is sent only to the self-hosted HTTPS service you configure, never to Shellsmith maintainers.
+Shellsmith is a desktop hardening tool for Android and iOS apps, with two key-delivery modes: **local offline keys** and **self-hosted online keys**. In offline mode, key derivation, hardening, signing, and artifact verification all happen on your machine, with no network or key service required. In online mode (BYOS), the artifact IKM is held by your self-hosted HTTPS service; the APK carries only the service URL and token and fetches the key at launch after device approval or Google Play Integrity authorization.
+
+On Android, Shellsmith provides DEX encryption and certificate binding for APK/AAB, PVM2 method virtualization, baseline anti-debugging, and optional strict protection, then repackages, aligns, and signs the output. On iOS, it works on an isolated copy, integrates Swift Confidential and freeRASP, then archives, exports, and verifies signing. Apart from registration and key fetch against your own service in online mode, APKs, certificates, signing materials, and passwords are never uploaded or sent to Shellsmith maintainers.
 
 A desktop GUI is available for Windows, macOS, and Linux, with Chinese and English interfaces. The CLI is built from source for automation.
 
 > Use only with applications you own or are authorized to protect. Do not bypass third-party protections or use this tool for unauthorized purposes.
 
-**Quick navigation** · [Capabilities](#core-capabilities) · [Quick Start](#quick-start) · [Compatibility](#compatibility-and-limitations) · [BYOS](#byos-out-of-package-keys) · [Security Scope](#how-it-works-and-security-scope) · [Documentation](#documentation-and-development)
+**Quick navigation** · [Capabilities](#core-capabilities) · [Quick Start](#quick-start) · [Compatibility](#compatibility-and-limitations) · [Online Keys (BYOS)](#byos-out-of-package-keys) · [Security Scope](#how-it-works-and-security-scope) · [Documentation](#documentation-and-development)
 
 ## Core Capabilities
 
-- **Android DEX hardening:** encrypt application DEX files and bind them to the original certificate, then repackage, align, and optionally sign. Baseline anti-debugging and optional strict checks are included.
+- **Two key-delivery modes:** **Offline keys** are derived locally and wrapped into the artifact, requiring no network or key service. **Online keys (BYOS)** keep the IKM on your self-hosted HTTPS service; the artifact carries only the service URL and token and fetches the key at launch after device approval or Play Integrity authorization. See [BYOS Out-of-Package Keys](#byos-out-of-package-keys).
+- **Android code protection:** encrypt application DEX files, bind them to the original certificate, and support PVM2 method virtualization, baseline anti-debugging, and optional strict protection; then repackage, align, and sign.
 - **iOS source protection:** modify an isolated working copy with Swift Confidential and freeRASP, then archive, export, and verify it with `xcodebuild`. The original project is left unchanged.
-- **BYOS out-of-package keys:** artifacts carry only the service URL and token; the IKM is fetched from your self-hosted HTTPS service at launch. Device approval and Google Play Integrity are supported. See [BYOS Out-of-Package Keys](#byos-out-of-package-keys).
 - **Integrated signing:** import, create, and manage certificates; sign protected output automatically or sign an APK independently.
 - **Preflight checks and diagnostics:** inspect signatures, existing protection, system requirements, and ABIs; on failure, show a sanitized summary that can be previewed before submission.
 - **Reusable settings:** remember protection options and the certificate choice, customize output directory and filename, and freeze each task's configuration.
@@ -102,7 +104,7 @@ The screenshot illustrates the layout; available options depend on the current v
 | Android 5.0 and later | API 21+; `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`. An APK does not need all four ABIs |
 | Android 4.4 industrial | API 19+; inputs must have no native libraries or only `armeabi-v7a` libraries. Physical-device coverage is an Android 4.4.2 `armeabi-v7a`/NEON industrial device |
 | iOS source project | iOS 13+ SwiftUI/UIKit application targets; archive, export, and signing require macOS with full Xcode |
-| BYOS out-of-package keys | Android APK only; `device_approval` requires `minSdk 24+`, `play_integrity` requires `minSdk 29+`; requires a reachable self-hosted HTTPS service and network; AAB, iOS, and Android 4.4 compatibility mode are not supported |
+| Online keys (BYOS) | Android APK only; `device_approval` requires `minSdk 24+`, `play_integrity` requires `minSdk 29+`; requires a reachable self-hosted HTTPS service and network; AAB, iOS, and Android 4.4 compatibility mode are not supported |
 
 ### Not Supported
 
@@ -112,7 +114,7 @@ The screenshot illustrates the layout; available options depend on the current v
 - Missing business libraries are not generated.
 - The GUI processes one APK or AAB at a time; no batch queue is provided.
 - Swift Confidential only processes Swift source. Objective-C projects can use RASP but get no literal protection, so do not supply `confidential.yml` for them.
-- BYOS supports Android APKs only. Without a reachable self-hosted HTTPS service and network, a BYOS artifact cannot start and does not fall back to offline loading.
+- Online keys (BYOS) support Android APKs only. Without a reachable self-hosted HTTPS service and network, a BYOS artifact cannot start and does not fall back to offline loading.
 
 ### Requires Your Own Validation
 
@@ -128,6 +130,15 @@ The screenshot illustrates the layout; available options depend on the current v
 See the [usage guide](docs/usage.md) for detailed boundaries.
 
 ## BYOS Out-of-Package Keys
+
+Shellsmith offers two key-delivery modes:
+
+| Mode | Key location | Runtime requirement | Use case |
+|---|---|---|---|
+| Local offline key | Derived on the build machine and wrapped into the APK | No network or key service | Fully offline delivery, no backend |
+| Online key (BYOS) | Your self-hosted HTTPS service | Network authorization on every launch | Device approval, Play Integrity, device/artifact revocation |
+
+Local offline keys are the default. To move the IKM out of the APK, select a BYOS service under **Key Delivery**. Choose the mode per protection task; online mode never falls back to offline keys when authorization fails. The rest of this section covers the online key mode.
 
 BYOS (Bring Your Own Server) moves the artifact IKM out of the APK. It is intended for teams that manage their own keys, device authorization, and revocation policy.
 
@@ -187,9 +198,9 @@ flowchart TB
 
 Protection reads the original certificate, compresses and encrypts DEX files, injects the stub, then rebuilds, aligns, and optionally signs the APK. At runtime, the stub checks the environment, validates or decrypts the DEX cache, loads code, and starts the original application.
 
-The default offline DEXB v6 payload encryption **does not provide confidentiality against static analysis**: both inputs of the envelope key (the signing certificate fingerprint and the build ID) are stored in cleartext in the package header, so the key can be recovered from the APK file alone, and with it the derived keys for every business DEX, the PVM2 images, encrypted assets and business `.text`. What it does provide is refusal to run after re-signing, plus a higher cost for automated scanning and reverse engineering.
+With local offline keys, DEXB v6 payload encryption **does not provide confidentiality against static analysis**: both inputs of the envelope key (the signing certificate fingerprint and the build ID) are stored in cleartext in the package header, so the key can be recovered from the APK file alone, and with it the derived keys for every business DEX, the PVM2 images, encrypted assets and business `.text`. What it does provide is refusal to run after re-signing, plus a higher cost for automated scanning and reverse engineering.
 
-BYOS artifacts use DEXB v7: the APK header stores only `server_url` and `token_id`; the IKM remains on the server and is released after authorization, so the APK alone cannot recover it. An authorized process still holds the IKM and plaintext code in memory.
+Online-key (BYOS) artifacts use DEXB v7: the APK header stores only `server_url` and `token_id`; the IKM remains on the server and is released after authorization, so the APK alone cannot recover it. An authorized process still holds the IKM and plaintext code in memory.
 
 Production uses a decrypted DEX cache in the application's private directory. It is **not a fully in-memory DEX loader or method-code extraction scheme**. Root access, process control, or other elevated privileges may allow runtime code extraction. Standard protection does not block startup solely because of root signals; strict protection blocks some risky environments but cannot guarantee detection of hidden root or prevent bypasses.
 
@@ -201,7 +212,7 @@ Hardening does not replace server-side authorization, key management, or applica
 
 ## Privacy
 
-In the default offline mode, APKs, certificates, keystores, and signing passwords are processed locally and not uploaded. When BYOS is explicitly enabled, the artifact IKM and build credential are sent only to the self-hosted HTTPS service you configure, not to Shellsmith maintainers. The desktop tool also has the following independent data channels:
+In local offline-key mode, APKs, certificates, keystores, and signing passwords are processed locally and not uploaded. When BYOS is explicitly enabled, the artifact IKM and build credential are sent only to the self-hosted HTTPS service you configure, not to Shellsmith maintainers. The desktop tool also has the following independent data channels:
 
 | Channel | Data and controls |
 |---|---|
