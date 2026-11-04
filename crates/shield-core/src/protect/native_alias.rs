@@ -137,7 +137,7 @@ pub(crate) fn inspect_original_apk(apk_path: &Path) -> Result<OriginalNativeLibr
     let mut normalized_paths = HashSet::new();
     for index in 0..archive.len() {
         let entry = archive.by_index(index)?;
-        let name = entry.name();
+        let name = entry.name()?.to_string();
         if !name.starts_with("lib/") || !name.to_ascii_lowercase().ends_with(".so") {
             continue;
         }
@@ -188,7 +188,7 @@ pub(crate) fn verify_in_apk(apk_path: &Path, runtime: &InjectedNativeRuntime) ->
     let mut found_abis = HashSet::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.to_string();
         let base_name = name.rsplit('/').next().unwrap_or("");
         if base_name.eq_ignore_ascii_case(&runtime.canonical_file_name) {
             anyhow::bail!("加固 APK 仍包含 Native 规范库名称: {name}");

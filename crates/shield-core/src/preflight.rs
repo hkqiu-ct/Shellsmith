@@ -124,15 +124,15 @@ fn inspect_archive(path: &Path) -> Result<ArchiveFacts> {
 
     for index in 0..zip.len() {
         let entry = zip.by_index(index).context("读取 APK ZIP 条目失败")?;
-        let name = entry.name();
+        let name = entry.name()?.to_string();
         if name == "AndroidManifest.xml" {
             facts.has_manifest = true;
         }
-        if is_dex_entry(name) {
+        if is_dex_entry(&name) {
             facts.dex_count += 1;
             facts.dex_total_size = facts.dex_total_size.saturating_add(entry.size());
         }
-        if is_native_library(name) {
+        if is_native_library(&name) {
             facts.native_library_count += 1;
             if entry.compression() != zip::CompressionMethod::Stored {
                 facts.compressed_native_library_count += 1;

@@ -1077,7 +1077,8 @@ fn extract_aab_modules(
     let mut seen = std::collections::BTreeSet::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
-        let Some((module, relative)) = entry.name().split_once('/') else {
+        let name = entry.name()?.into_owned();
+        let Some((module, relative)) = name.split_once('/') else {
             continue;
         };
         if !requested.contains(module) || relative.is_empty() {
@@ -1088,13 +1089,13 @@ fn extract_aab_modules(
             .components()
             .any(|component| !matches!(component, std::path::Component::Normal(_)))
         {
-            anyhow::bail!("AAB 模块条目路径非法：{}", entry.name());
+            anyhow::bail!("AAB 模块条目路径非法：{name}");
         }
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
-            anyhow::bail!("AAB 模块不允许符号链接：{}", entry.name());
+            anyhow::bail!("AAB 模块不允许符号链接：{name}");
         }
         let destination = root.join(module).join(relative_path);
         if entry.is_dir() {
@@ -1102,7 +1103,7 @@ fn extract_aab_modules(
             continue;
         }
         if !seen.insert((module.to_string(), relative.to_string())) {
-            anyhow::bail!("AAB 模块包含重复条目：{}", entry.name());
+            anyhow::bail!("AAB 模块包含重复条目：{name}");
         }
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1875,7 +1876,10 @@ mod tests {
         super::zip_bundle_module(&module, &module_zip).unwrap();
         let file = std::fs::File::open(module_zip).unwrap();
         let archive = zip::ZipArchive::new(file).unwrap();
-        let names: Vec<_> = archive.file_names().map(str::to_string).collect();
+        let names: Vec<_> = archive
+            .file_names()
+            .map(|name| name.unwrap().into_owned())
+            .collect();
         assert!(names.contains(&"manifest/AndroidManifest.xml".to_string()));
         assert!(names.contains(&"dex/classes.dex".to_string()));
         assert!(names.contains(&"resources.pb".to_string()));

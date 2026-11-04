@@ -29,18 +29,21 @@ pub fn check_apk(path: &Path, apksigner_path: Option<&Path>) -> Result<ApkCheckO
             Err(_) => continue,
         };
 
-        if entry.name() == "classes.dex" && !already_protected {
+        let name = match entry.name() {
+            Ok(name) => name.into_owned(),
+            Err(_) => continue,
+        };
+        if name == "classes.dex" && !already_protected {
             let entry_size = entry.size();
             already_protected = contains_valid_mshd_block(&mut entry, entry_size)
                 .context("读取 classes.dex 失败")?;
         }
         // Xop 使用 assets/protector 目录保存壳载荷。即使没有 MSHD trailer，
         // 也必须拒绝把它再次交给 Shellsmith，避免形成两套 Application/Loader。
-        if is_known_protection_marker(entry.name()) {
+        if is_known_protection_marker(&name) {
             already_protected = true;
         }
-        if let Some(abi) = entry
-            .name()
+        if let Some(abi) = name
             .strip_prefix("lib/")
             .and_then(|name| name.split_once('/').map(|(abi, _)| abi))
         {
@@ -274,7 +277,10 @@ fn check_apk_signed(apk_path: &Path, apksigner_path: Option<&Path>) -> Result<bo
         let Ok(entry) = archive.by_index(i) else {
             continue;
         };
-        let name = entry.name();
+        let name = match entry.name() {
+            Ok(name) => name.into_owned(),
+            Err(_) => continue,
+        };
         if name.starts_with("META-INF/")
             && (name.ends_with(".RSA") || name.ends_with(".DSA") || name.ends_with(".EC"))
         {
@@ -459,7 +465,8 @@ Source Stamp Signer certificate SHA-256 digest: 22222222222222222222222222222222
         let dir = tempfile::tempdir().unwrap();
         let apk = dir.path().join("empty.apk");
         std::fs::write(&apk, []).unwrap();
-        let message = classify_apk_zip_error(&apk, &zip::result::ZipError::InvalidArchive("eof"));
+        let message =
+            classify_apk_zip_error(&apk, &zip::result::ZipError::InvalidArchive("eof".into()));
         assert!(message.starts_with("文件为空，不是有效 APK"));
     }
 

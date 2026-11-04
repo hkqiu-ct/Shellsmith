@@ -43,7 +43,7 @@ pub(crate) fn inject_runtime(
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        let file_name = file.name().to_string();
+        let file_name = file.name()?.to_string();
 
         if file_name == "metadata.json" || file_name.contains("libzstd-jni") {
             continue;

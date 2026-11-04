@@ -635,10 +635,10 @@ fn archive_dexes(path: &Path) -> Result<BTreeMap<String, String>> {
     let mut values = BTreeMap::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        if !entry.name().ends_with(".dex") {
+        let name = entry.name()?.to_string();
+        if !name.ends_with(".dex") {
             continue;
         }
-        let name = entry.name().to_owned();
         let mut hasher = Sha256::new();
         std::io::copy(&mut entry, &mut hasher)?;
         ensure!(

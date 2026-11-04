@@ -44,13 +44,14 @@ fn is_directory_name(name: &str) -> bool {
     name.ends_with('/')
 }
 
-fn build_file_options(
-    file: &zip::read::ZipFile<'_>,
+fn build_file_options<R: Read + ?Sized>(
+    file: &zip::read::ZipFile<'_, R>,
     alignment: u16,
     native_packaging: NativeLibraryPackaging,
-) -> SimpleFileOptions {
+) -> Result<SimpleFileOptions> {
+    let name = file.name()?.into_owned();
     let compression =
-        if native_packaging == NativeLibraryPackaging::Store && is_native_library(file.name()) {
+        if native_packaging == NativeLibraryPackaging::Store && is_native_library(&name) {
             CompressionMethod::Stored
         } else {
             file.compression()
@@ -72,7 +73,7 @@ fn build_file_options(
         options = options.unix_permissions(mode);
     }
 
-    options
+    Ok(options)
 }
 
 pub fn verify_apk_alignment(path: &Path) -> Result<Vec<AlignmentIssue>> {
@@ -86,15 +87,17 @@ pub fn verify_apk_alignment(path: &Path) -> Result<Vec<AlignmentIssue>> {
         let file = archive
             .by_index(i)
             .with_context(|| format!("读取 ZIP 条目失败: index={i}"))?;
-        if file.is_dir() || is_directory_name(file.name()) {
+        let name = file.name()?.into_owned();
+        if file.is_dir() || is_directory_name(&name) {
             continue;
         }
 
-        let required = required_alignment(file.name()) as u64;
-        let actual = file.data_start() % required;
+        let required = required_alignment(&name) as u64;
+        let data_start = file.data_start().context("ZIP 条目缺少数据偏移")?;
+        let actual = data_start % required;
         if actual != 0 {
             issues.push(AlignmentIssue {
-                name: file.name().to_string(),
+                name,
                 required,
                 actual,
             });
@@ -171,8 +174,9 @@ pub(crate) fn find_compressed_native_libraries(path: &Path) -> Result<Vec<String
         let entry = archive
             .by_index(index)
             .with_context(|| format!("读取 ZIP 条目失败: index={index}"))?;
-        if is_native_library(entry.name()) && entry.compression() != CompressionMethod::Stored {
-            compressed.push(entry.name().to_string());
+        let name = entry.name()?.into_owned();
+        if is_native_library(&name) && entry.compression() != CompressionMethod::Stored {
+            compressed.push(name);
         }
     }
 
@@ -209,10 +213,10 @@ fn rewrite_aligned(
         .with_context(|| format!("解析 APK ZIP 结构失败: {}", path.display()))?;
 
     let mut writer = ZipWriter::new(io::BufWriter::new(output));
-    writer.set_raw_comment(archive.comment().to_vec().into_boxed_slice());
-    if let Some(comment) = archive.zip64_comment() {
-        writer.set_raw_zip64_comment(Some(comment.to_vec().into_boxed_slice()));
-    }
+    // zip 9 移除了 raw ZIP64 注释 API；标准归档注释仍按原字节保留。
+    writer
+        .set_raw_comment(archive.comment().to_vec().into_boxed_slice())
+        .context("写入 APK 注释失败")?;
 
     let mut buffer = vec![0u8; 64 * 1024];
 
@@ -220,9 +224,9 @@ fn rewrite_aligned(
         let mut file = archive
             .by_index(i)
             .with_context(|| format!("读取 ZIP 条目失败: index={i}"))?;
-        let name = file.name().to_string();
+        let name = file.name()?.into_owned();
         let alignment = required_alignment(&name);
-        let options = build_file_options(&file, alignment, native_packaging);
+        let options = build_file_options(&file, alignment, native_packaging)?;
 
         if file.is_dir() || is_directory_name(&name) {
             writer
@@ -380,10 +384,15 @@ mod tests {
         let so_offset = archive
             .by_name("lib/arm64-v8a/libdemo.so")
             .unwrap()
-            .data_start();
+            .data_start()
+            .unwrap();
         assert_eq!(so_offset % SHARED_LIB_ALIGNMENT as u64, 0);
 
-        let payload_offset = archive.by_name("res/raw/payload.bin").unwrap().data_start();
+        let payload_offset = archive
+            .by_name("res/raw/payload.bin")
+            .unwrap()
+            .data_start()
+            .unwrap();
         assert_eq!(payload_offset % DEFAULT_ALIGNMENT as u64, 0);
     }
 
