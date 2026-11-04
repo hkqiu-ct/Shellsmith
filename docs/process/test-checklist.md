@@ -227,6 +227,18 @@ cargo test -p mocika-shield 中文证书真实 -- --ignored --nocapture
 
 ## 关键改动验证记录
 
+### 2026-11-04：真实业务 APK 覆盖安装与录音回归
+
+| 项 | 结果 |
+|----|------|
+| 样本 | 用户真实录音 App，minSdk 26、targetSdk 36，从 HONOR Android 15 真机拉取当前安装版本 |
+| 加固 | 当前 main 的 `shield protect` + 标准 `resources.zip`，`profile=balanced`；扫描到 TheRouter 注册项 5 个（索引 `com.therouter.inject.DebugOnlyKt`） |
+| 签名 | 使用该 App 原签名证书（SHA-256 前缀 `b3272c51...`）的同一 keystore 重新签名；输出 v2/v3 签名校验通过，证书与设备原包一致 |
+| 覆盖安装 | 同版本、同签名 `install -r` 成功；原有 16 条录音数据全部保留 |
+| 启动与业务 | 首页正常加载；麦克风授权后录制 30 秒并保存，列表变为 17 条；强停后二次启动正常；全程无 `AndroidRuntime` 崩溃 |
+| 恢复 | 重新安装拉取的原 APK 恢复原版本；从 App 内删除测试录音，数据回到 16 条 |
+| 结论边界 | 单个真实 App；登录、云同步和其他页面未逐项覆盖；TheRouter 首页/录音链路已实际启动，但不代表所有路由均已验证 |
+
 ### 2026-11-03：1.10.0 图片兼容与 ARouter 覆盖安装回归
 
 | 项 | 结果 |
