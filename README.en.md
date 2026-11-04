@@ -5,6 +5,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/kairowan/Shellsmith?style=flat-square&label=release&color=6366f1)](https://github.com/kairowan/Shellsmith/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/kairowan/Shellsmith/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/kairowan/Shellsmith/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square)](#license)
+[![Support the author](https://img.shields.io/badge/%E2%98%95-Support%20the%20author-ffdd00?style=flat-square)](#support-the-author)
 
 Shellsmith is a local-first desktop hardening tool. It protects Android APK/AAB outputs and iOS source projects, signs them, and verifies the results entirely on your machine; APKs, certificates, and signing materials are never uploaded. When BYOS out-of-package keys are explicitly enabled, the artifact IKM is sent only to the self-hosted HTTPS service you configure, never to Shellsmith maintainers.
 
@@ -282,6 +283,17 @@ Desktop frameworks, frontend packages, and general-purpose Rust libraries are no
 </details>
 
 If a credit is wrong, a license is mislabeled, or a project is missing, please open an issue or pull request and we will correct it.
+
+## Support the Author
+
+If Shellsmith has been useful to you, you can buy the author a coffee. Your support helps fund ongoing maintenance, compatibility testing, and future development.
+
+| WeChat Pay (Mainland China) | Alipay (Mainland China) |
+|:---:|:---:|
+| <img src="docs/assets/donate/wechat-pay.png" height="300" alt="WeChat Pay QR code"> | <img src="docs/assets/donate/alipay.png" height="300" alt="Alipay QR code"> |
+| Scan with WeChat | Scan with Alipay |
+
+Sponsorship is entirely optional and does not affect features, licensing, or issue-handling priority. Please verify the payee before sending.
 
 ## License
 
