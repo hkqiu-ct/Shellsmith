@@ -42,7 +42,7 @@ pub fn inspect_aab(path: &Path) -> Result<AabInspection> {
         let entry = archive
             .by_index(index)
             .with_context(|| format!("读取 AAB 条目 {index} 失败"))?;
-        let name = entry.name();
+        let name = entry.name()?.into_owned();
         if name == "BundleConfig.pb" {
             has_bundle_config = true;
         }

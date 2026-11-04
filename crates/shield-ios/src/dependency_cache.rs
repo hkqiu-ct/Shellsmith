@@ -205,15 +205,15 @@ fn read_sdk(
     for index in 0..zip.len() {
         check_cancel(cancel)?;
         let entry = zip.by_index(index)?;
-        let name = entry.name();
+        let name = entry.name()?.into_owned();
         anyhow::ensure!(
             !name.contains('\\')
-                && Path::new(name)
+                && Path::new(&name)
                     .components()
                     .all(|part| matches!(part, Component::Normal(_))),
             "freeRASP ZIP 包含不安全路径"
         );
-        anyhow::ensure!(names.insert(name.to_string()), "freeRASP ZIP 包含重复条目");
+        anyhow::ensure!(names.insert(name.clone()), "freeRASP ZIP 包含重复条目");
         let kind = entry.unix_mode().unwrap_or(0) & 0o170000;
         anyhow::ensure!(
             matches!(kind, 0 | 0o100000 | 0o040000),

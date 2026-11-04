@@ -369,7 +369,7 @@ fn validate_ipa_structure(path: &Path) -> Result<()> {
     let mut has_executable_container = false;
     for index in 0..archive.len() {
         let entry = archive.by_index(index)?;
-        let name = entry.name();
+        let name = entry.name()?.into_owned();
         if name.starts_with("Payload/") && name.ends_with(".app/Info.plist") {
             has_info = true;
         }

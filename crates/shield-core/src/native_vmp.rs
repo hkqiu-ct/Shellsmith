@@ -134,7 +134,12 @@ fn validate_entry(entry: &str) -> Result<(&str, &str, &str)> {
 
 fn zip_library(archive: &mut zip::ZipArchive<File>, name: &str) -> Result<Vec<u8>> {
     ensure!(
-        archive.file_names().filter(|n| *n == name).count() == 1,
+        archive
+            .file_names()
+            .filter_map(|n| n.ok())
+            .filter(|n| n.as_ref() == name)
+            .count()
+            == 1,
         "Native 归档条目缺失或重复：{name}"
     );
     let entry = archive.by_name(name)?;

@@ -136,7 +136,7 @@ pub(crate) fn apk_index(path: &Path) -> Result<ApkIndex> {
     for i in 0..archive.len() {
         let entry = archive.by_index(i)?;
         if index
-            .insert(entry.name().to_string(), (entry.size(), entry.crc32()))
+            .insert(entry.name()?.to_string(), (entry.size(), entry.crc32()))
             .is_some()
         {
             bail!("APK 包含重复条目");

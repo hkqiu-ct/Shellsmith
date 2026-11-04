@@ -96,16 +96,17 @@ pub(crate) fn restore_original_resources(original_apk: &Path, rebuilt_apk: &Path
     let mut temp = NamedTempFile::new_in(parent).context("创建资源恢复临时 APK 失败")?;
     {
         let mut writer = ZipWriter::new(BufWriter::new(temp.as_file_mut()));
-        writer.set_raw_comment(rebuilt.comment().to_vec().into_boxed_slice());
-        if let Some(comment) = rebuilt.zip64_comment() {
-            writer.set_raw_zip64_comment(Some(comment.to_vec().into_boxed_slice()));
-        }
+        // zip 9 移除了 raw ZIP64 注释 API；标准归档注释仍按原字节保留。
+        writer
+            .set_raw_comment(rebuilt.comment().to_vec().into_boxed_slice())
+            .context("写入重编 APK 注释失败")?;
 
         for index in 0..rebuilt.len() {
             let entry = rebuilt
                 .by_index(index)
                 .with_context(|| format!("读取重编 APK 条目失败：index={index}"))?;
-            if !is_resource_entry(entry.name()) {
+            let name = entry.name()?.into_owned();
+            if !is_resource_entry(&name) {
                 writer
                     .raw_copy_file(entry)
                     .context("复制受保护 APK 条目失败")?;
@@ -115,7 +116,8 @@ pub(crate) fn restore_original_resources(original_apk: &Path, rebuilt_apk: &Path
             let entry = original
                 .by_index(index)
                 .with_context(|| format!("读取原 APK 资源条目失败：index={index}"))?;
-            if is_resource_entry(entry.name()) {
+            let name = entry.name()?.into_owned();
+            if is_resource_entry(&name) {
                 writer
                     .raw_copy_file(entry)
                     .context("恢复原 APK 混淆资源条目失败")?;
@@ -168,8 +170,9 @@ fn resource_index<R: std::io::Read + std::io::Seek>(
         let entry = archive
             .by_index(position)
             .with_context(|| format!("读取 APK 资源索引失败：index={position}"))?;
-        if is_resource_entry(entry.name()) {
-            index.push((entry.name().to_string(), entry.size(), entry.crc32()));
+        let name = entry.name()?.into_owned();
+        if is_resource_entry(&name) {
+            index.push((name, entry.size(), entry.crc32()));
         }
     }
     index.sort();
