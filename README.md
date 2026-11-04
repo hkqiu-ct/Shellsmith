@@ -1,16 +1,23 @@
-# Shellsmith — Android 与 iOS 应用加固工具
-
-简体中文 | [English](README.en.md)
-
-[![最新版本](https://img.shields.io/github/v/release/kairowan/Shellsmith?style=flat-square&label=最新版本&color=6366f1)](https://github.com/kairowan/Shellsmith/releases/latest)
-[![CI](https://img.shields.io/github/actions/workflow/status/kairowan/Shellsmith/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/kairowan/Shellsmith/actions/workflows/ci.yml)
-[![许可证](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square)](#许可证)
+<div align="center">
+  <img src="docs/assets/brand/shellsmith-icon.png" width="96" alt="Shellsmith logo">
+  <h1>Shellsmith</h1>
+  <p><strong>Android 与 iOS 应用加固工具</strong></p>
+  <p>本地优先 · 离线加固 · 签名一体化</p>
+  <p>简体中文 | <a href="README.en.md">English</a></p>
+  <p>
+    <a href="https://github.com/kairowan/Shellsmith/releases/latest"><img src="https://img.shields.io/github/v/release/kairowan/Shellsmith?style=flat-square&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=6366f1" alt="最新版本"></a>
+    <a href="https://github.com/kairowan/Shellsmith/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/kairowan/Shellsmith/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+    <a href="#许可证"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square" alt="许可证"></a>
+  </p>
+</div>
 
 Shellsmith 是一款本地优先的桌面加固工具：Android APK/AAB 与 iOS 源码工程的加固、签名和产物验证都在本机完成，APK、证书和签名材料不会上传。显式启用 BYOS 包外密钥时，产物 IKM 只会发送到你配置的自建 HTTPS 服务，不经过 Shellsmith 维护者。
 
 提供 Windows、macOS、Linux 桌面 GUI（中英文界面），CLI 可从源码构建用于自动化和本地开发。
 
 > 仅用于保护你拥有合法权利的 Android 与 iOS 应用，请勿用于绕过第三方保护或其他未授权场景。
+
+**快速导航** · [核心能力](#核心能力) · [快速开始](#快速开始) · [兼容性](#兼容性与限制) · [BYOS](#byos-包外密钥) · [安全边界](#工作原理与安全边界) · [文档](#文档与开发)
 
 ## 核心能力
 
@@ -80,7 +87,9 @@ xattr -rd com.apple.quarantine /Applications/Shellsmith.app
 
 ## 界面预览
 
-![Shellsmith 加固页示意](docs/assets/screenshots/readme-protect-main.png)
+<p align="center">
+  <img src="docs/assets/screenshots/readme-protect-main.png" width="860" alt="Shellsmith 加固页示意">
+</p>
 
 截图用于展示页面布局，具体选项以当前版本为准。更多页面与操作说明见[使用指南](docs/usage.md)。
 
@@ -157,6 +166,22 @@ Shellsmith 不托管 BYOS 服务端。仓库提供一份可独立部署的 Go/Po
 - [技术内参中的 DEXB 边界](docs/design/internals.md)
 
 ## 工作原理与安全边界
+
+```mermaid
+flowchart TB
+    subgraph Android[Android]
+        A1[APK / AAB] --> A2[预检]
+        A2 --> A3[DEX 加固]
+        A3 --> A4[重打包 / 对齐]
+        A4 --> A5[签名]
+    end
+    subgraph iOS[iOS]
+        I1[Xcode 工程] --> I2[检查]
+        I2 --> I3[源码保护]
+        I3 --> I4[Archive / Export]
+        I4 --> I5[签名验证]
+    end
+```
 
 ### Android
 

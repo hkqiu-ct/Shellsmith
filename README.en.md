@@ -1,16 +1,23 @@
-# Shellsmith — Android and iOS App Hardening
-
-[简体中文](README.md) | English
-
-[![Latest Release](https://img.shields.io/github/v/release/kairowan/Shellsmith?style=flat-square&label=release&color=6366f1)](https://github.com/kairowan/Shellsmith/releases/latest)
-[![CI](https://img.shields.io/github/actions/workflow/status/kairowan/Shellsmith/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/kairowan/Shellsmith/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square)](#license)
+<div align="center">
+  <img src="docs/assets/brand/shellsmith-icon.png" width="96" alt="Shellsmith logo">
+  <h1>Shellsmith</h1>
+  <p><strong>Android and iOS App Hardening</strong></p>
+  <p>Local-first · Offline hardening · Integrated signing</p>
+  <p><a href="README.md">简体中文</a> | English</p>
+  <p>
+    <a href="https://github.com/kairowan/Shellsmith/releases/latest"><img src="https://img.shields.io/github/v/release/kairowan/Shellsmith?style=flat-square&label=release&color=6366f1" alt="Latest release"></a>
+    <a href="https://github.com/kairowan/Shellsmith/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/kairowan/Shellsmith/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+    <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square" alt="License"></a>
+  </p>
+</div>
 
 Shellsmith is a local-first desktop hardening tool. It protects Android APK/AAB outputs and iOS source projects, signs them, and verifies the results entirely on your machine; APKs, certificates, and signing materials are never uploaded. When BYOS out-of-package keys are explicitly enabled, the artifact IKM is sent only to the self-hosted HTTPS service you configure, never to Shellsmith maintainers.
 
 A desktop GUI is available for Windows, macOS, and Linux, with Chinese and English interfaces. The CLI is built from source for automation.
 
 > Use only with applications you own or are authorized to protect. Do not bypass third-party protections or use this tool for unauthorized purposes.
+
+**Quick navigation** · [Capabilities](#core-capabilities) · [Quick Start](#quick-start) · [Compatibility](#compatibility-and-limitations) · [BYOS](#byos-out-of-package-keys) · [Security Scope](#how-it-works-and-security-scope) · [Documentation](#documentation-and-development)
 
 ## Core Capabilities
 
@@ -80,7 +87,9 @@ This removes quarantine; it does not mean the application is notarized by Apple.
 
 ## Preview
 
-![Shellsmith protection page illustration](docs/assets/screenshots/readme-protect-main.png)
+<p align="center">
+  <img src="docs/assets/screenshots/readme-protect-main.png" width="860" alt="Shellsmith protection page illustration">
+</p>
 
 The screenshot illustrates the layout; available options depend on the current version. More screens and instructions are in the [usage guide](docs/usage.md).
 
@@ -157,6 +166,22 @@ Shellsmith does not host the BYOS service. The repository documents a separately
 - [DEXB boundaries in the technical internals](docs/design/internals.md)
 
 ## How It Works and Security Scope
+
+```mermaid
+flowchart TB
+    subgraph Android[Android]
+        A1[APK / AAB] --> A2[Preflight]
+        A2 --> A3[DEX hardening]
+        A3 --> A4[Repackage / align]
+        A4 --> A5[Sign]
+    end
+    subgraph iOS[iOS]
+        I1[Xcode project] --> I2[Check]
+        I2 --> I3[Source protection]
+        I3 --> I4[Archive / Export]
+        I4 --> I5[Signature verification]
+    end
+```
 
 ### Android
 
