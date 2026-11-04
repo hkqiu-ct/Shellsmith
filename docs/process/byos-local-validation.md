@@ -209,3 +209,25 @@ ANDROID_HOME=/path/to/android-sdk python3 tests/scripts/check-runtime-jni.py \
 - 标准、BYOS、Play 三套资源在 Android 15 真机 JNI 探针均返回 `RUNTIME_JNI_OK`；标准与 BYOS 资源在 API 24 模拟器也返回 `RUNTIME_JNI_OK`。
 
 边界：API 24 使用模拟器，尚未覆盖真实 Android 7 设备；API 25 未单独执行；Play 模式仍要求 API 29 及以上。
+
+## 2026-11-04：真实 device_approval 临时应用验证
+
+使用真实 HTTPS 测试服务和临时测试包（`device_approval`）完成以下链路，未使用 Play：
+
+| 场景 | 结果 |
+|---|---|
+| 首次安装、设备未批准 | `K03_403`，在 `attachBaseContext` 失败关闭，业务不加载 |
+| 管理员批准设备后首次启动 | 取钥成功，ARouter Fragment 正常 |
+| 强停后二次启动 | 缓存启动成功，业务页面正常 |
+| 错误包名/证书 | `K03_403`，不加载业务 |
+| 错误构建 API key | 构建期 `BYOS 注册失败`，不生成可用包 |
+| 阻断 443（连接拒绝） | `K14`，失败关闭；解除后重试成功 |
+| 443 DROP（连接超时） | `K10`，约 8 秒失败关闭，不无限阻塞 |
+| 应用/策略撤销后重新取钥 | `K03_403`，失败关闭 |
+
+边界：
+
+- 本次验证使用临时测试应用，未使用真实业务包；真实业务页面、登录和多进程仍需另测。
+- 设备单独撤销与重新批准未单独隔离验证；应用撤销分支已验证。
+- Play Integrity、Google Play 分发和真实 KMS/HSM 未验证。
+- 测试真机在断网测试中进入飞行模式，后续模拟器完成；真机需手动恢复网络。
