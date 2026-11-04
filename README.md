@@ -6,77 +6,27 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/kairowan/Shellsmith/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/kairowan/Shellsmith/actions/workflows/ci.yml)
 [![许可证](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square)](#许可证)
 
-默认离线模式下在本机完成 Android APK/AAB 与 iOS 源码工程的加固、签名和产物验证，加固与签名材料不出本机。显式启用 BYOS 包外密钥时，产物 IKM 只会发送到你配置的自建 HTTPS 服务，不经过 Shellsmith 维护者。
+Shellsmith 是一款本地优先的桌面加固工具：Android APK/AAB 与 iOS 源码工程的加固、签名和产物验证都在本机完成，APK、证书和签名材料不会上传。显式启用 BYOS 包外密钥时，产物 IKM 只会发送到你配置的自建 HTTPS 服务，不经过 Shellsmith 维护者。
 
-- **Android**：DEX 加密与运行时保护，重新打包、对齐并按需签名。
-- **iOS**：选择性 Swift 字符串保护、freeRASP 运行时检测，配合 Apple 原生 Archive、导出与签名验证。
-
-两条链路都用于提高静态分析、篡改和非法重签的成本，不承诺无法脱壳或逆向。
-
-推荐使用 Windows、macOS、Linux 桌面 GUI，支持中英文界面；CLI 可从源码构建，用于自动化和本地开发。
+提供 Windows、macOS、Linux 桌面 GUI（中英文界面），CLI 可从源码构建用于自动化和本地开发。
 
 > 仅用于保护你拥有合法权利的 Android 与 iOS 应用，请勿用于绕过第三方保护或其他未授权场景。
 
 ## 核心能力
 
-- **DEX 加固与运行时保护**：加密业务 DEX，绑定原签名证书；提供基础反调试和可选的严格保护。
-- **BYOS 包外密钥**：DEXB v7 产物只携带服务地址和 token，启动时从自建 HTTPS 服务取回 IKM；支持设备批准和 Google Play Integrity，服务端可用本机主密钥、AWS KMS、GCP KMS 或 PKCS#11 HSM。
-- **iOS 源码保护**：在独立工作副本中接入 Swift Confidential 与 freeRASP，再用 `xcodebuild` 完成 Archive、导出和签名验证。
-- **加固签名一体化**：证书导入、新建与管理，加固后自动签名，也支持独立签名。
-- **加固前风险检查与失败诊断**：检查签名、已有加固、系统要求、ABI 等兼容信号；失败时给出脱敏诊断摘要，可预览并确认发送错误报告。
-- **省去重复配置**：记住常用加固选项和加固页证书选择，可调整输出目录与文件名，任务开始后固定本次配置。
-- **安装与系统兼容**：处理 APK ZIP 对齐及常见 Native 库兼容问题；标准模式与 Android 4.4 工控模式分开选择。
+- **Android DEX 加固**：加密业务 DEX 并绑定原签名证书，重新打包、对齐并按需签名；提供基础反调试和可选的严格保护。
+- **iOS 源码保护**：在独立工作副本中接入 Swift Confidential 与 freeRASP，再用 `xcodebuild` 完成 Archive、导出和签名验证，原工程不被修改。
+- **BYOS 包外密钥**：产物只携带服务地址和 token，启动时从自建 HTTPS 服务取回 IKM；支持设备批准与 Google Play Integrity。详见 [BYOS 包外密钥](#byos-包外密钥)。
+- **加固签名一体化**：导入、新建和管理证书；加固后自动签名，也可独立签名。
+- **加固前检查与失败诊断**：检查签名、已有加固、系统要求、ABI 等兼容信号；失败时给出脱敏诊断摘要，可预览后确认发送。
+- **少重复配置**：记住常用加固选项和证书选择，支持自定义输出目录与文件名，任务开始后固定本次配置。
+- **安装兼容**：处理 APK ZIP 对齐及常见 Native 库问题；标准模式与 Android 4.4 工控模式分开选择。
 
-## BYOS 包外密钥
+两条链路都用于提高静态分析、篡改和非法重签的成本，不承诺无法脱壳或逆向。
 
-BYOS（Bring Your Own Server）把产物 IKM 从 APK 中移出，适合需要自行保管密钥、控制设备授权和撤销发布权限的应用。
+## 快速开始
 
-加固时 Shellsmith 为每个产物生成独立 32 字节 IKM，调用自建服务端的注册接口换取 `token_id`。APK 只携带服务地址和 token，不携带 IKM。应用启动时，客户端生成一次性 RSA 密钥对，带上 token、设备证明或 Play Integrity 证明请求 IKM；服务端验证授权、防重放和设备/Play 状态后，用本次请求的 RSA 公钥加密 `digest[32] || IKM[32]` 返回。客户端解密并校验摘要后才加载业务代码。
-
-### 授权方式
-
-| 方式 | 适用场景 | 要求 |
-|---|---|---|
-| `device_approval` | 国内、侧载、自有分发 | 设备 EC P-256 公钥登记，管理员批准；Android 7.0+（`minSdk 24`） |
-| `play_integrity` | Google Play 分发 | Play Console 与 Google Cloud 服务账号；Android 10+（`minSdk 29`） |
-
-两种方式都不会在失败时回退到离线加载。未知设备只登记为待批准并拒绝；Play 证明失败也不会切换到设备授权。
-
-### 使用流程
-
-1. 按协议部署自建 HTTPS 服务端，创建应用策略和构建 API key。源码构建需分别生成设备授权和 Play 资源：`make build-byos`、`make build-byos-play`；正式发布包已包含对应资源。
-2. 在 Shellsmith 的“密钥交付 → 新增服务”中填写 HTTPS 基础地址、构建 API key、授权方式和最终证书 SHA-256。
-3. 测试连接，加固并签名 APK。每个产物注册后获得新的 `token_id`。
-4. 设备模式首次启动会被拒绝，管理员在服务端批准设备后重新启动；Play 模式使用 Play 测试轨道 APK 验证。
-5. 撤销设备或产物后，后续取钥失败；已经进入进程的 IKM 和明文代码无法远程收回。
-
-### 服务端参考实现
-
-Shellsmith 不托管 BYOS 服务端。仓库提供一份可独立部署的 Go/PostgreSQL 参考实现，包含设备批准、Play Integrity、防重放、审计、主密钥轮换和 `migrate-backend` 迁移，并支持：
-
-- 本机 `local_aead` 主密钥
-- AWS KMS
-- GCP KMS（含 Cloud HSM）
-- PKCS#11 HSM
-
-参考实现和完整部署步骤见[服务端参考实现](docs/design/byos-key-server-reference.md)。
-
-### 安全边界
-
-- BYOS 让 APK 本身不含 IKM，降低仅凭 APK 离线恢复业务密钥的风险；它不等于 DRM，也不能阻止已授权进程的内存提取、Hook 或二次打包分析。
-- 服务端是信任根。服务端、KMS 或 HSM 被攻破后，攻击者可以解封 IKM；必须按服务端文档保护数据库、主密钥、KMS/HSM 权限和备份。
-- 每次启动仍需取钥，DEX 缓存启动也不例外；没有网络或服务端不可用时不会回退到离线加载。
-- 构建 API key 只用于加固注册，不进入 APK，也不具备运行时授权能力。
-- AAB、iOS 和 Android 4.4 兼容模式不支持 BYOS。
-
-### 文档入口
-
-- [BYOS HTTPS 密钥服务接入协议](docs/design/byos-key-server.md)
-- [BYOS 密钥服务端参考实现](docs/design/byos-key-server-reference.md)
-- [BYOS 本地验证与排障记录](docs/process/byos-local-validation.md)
-- [技术内参中的 DEXB 边界](docs/design/internals.md)
-
-## 下载与快速开始
+### 下载
 
 从 [GitHub Releases](https://github.com/kairowan/Shellsmith/releases/latest) 下载正式桌面安装包：
 
@@ -89,25 +39,25 @@ Shellsmith 不托管 BYOS 服务端。仓库提供一份可独立部署的 Go/Po
 ### 环境要求
 
 - 完整 JDK 8 或更高版本，确保 `java`、`keytool` 可用；使用 PVM2 需要 Java 17+。
-- 使用桌面发布包无需自行安装 Android SDK；AAB 与 APK 所需的 apktool、apksigner、bundletool、aapt2 已随包提供。
-- 仅 iOS 加固需要 macOS 并安装完整 Xcode，Windows 与 Linux 无法 Archive 或导出 IPA。
+- 桌面发布包无需自行安装 Android SDK；apktool、apksigner、bundletool、aapt2 已随包提供。
+- iOS 加固需要 macOS 和完整 Xcode；Windows 与 Linux 无法 Archive 或导出 IPA。
 
-签名状态随构建方式不同，下载后请按需确认：
+签名状态随构建方式不同：
 
-- 本地源码构建产出的是 adhoc 签名包。
+- 本地源码构建产出 adhoc 签名包。
 - 对外 macOS 产物只有在配置 Developer ID 与 notary profile 后才会签名、公证，并带上 `_notarized` 后缀；未带该后缀的包仅应从可信位置使用。
 
-### Android 快速流程
+### Android 加固流程
 
 1. 在 **证书** 页面导入原 APK 使用的签名证书。新项目可创建证书，但输入 APK 也必须先用该证书签名。
 2. 在 **加固** 页面选择已签名 APK，或切换到 **AAB · Google Play** 选择已签名 AAB，查看预检结果。
 3. 选择目标系统和保护策略。一般使用“Android 5.0 及以上”与“标准保护（推荐）”；目标确有 Android 4.4 时再选择工控模式。
 4. 确认输出目录、文件名和自动签名证书，按需调整当前应用的分享选择，再开始加固。
-5. 使用签名后的产物，在目标设备验证安装、启动、主要业务功能和覆盖升级。
+5. 在目标设备验证安装、启动、主要业务功能和覆盖升级。
 
-### iOS 快速流程
+### iOS 加固流程
 
-在 macOS 安装完整 Xcode，在 **加固 → iOS** 选择 `.xcodeproj` 或 `.xcworkspace`，填写 scheme、Team ID、Bundle ID，先运行检查，再选择独立空目录执行保护。`confidential.yml`、freeRASP 邮箱和 App Attest 服务端地址均为可选项；没有后台地址时仍可执行严格客户端加固，但不包含服务端设备证明闭环。原工程不会被修改。
+在 macOS 安装完整 Xcode，在 **加固 → iOS** 选择 `.xcodeproj` 或 `.xcworkspace`，填写 scheme、Team ID、Bundle ID，先运行检查，再选择独立空目录执行保护。`confidential.yml`、freeRASP 邮箱和 App Attest 服务端地址均为可选项；没有后台地址时仍可执行严格客户端加固，但不包含服务端设备证明闭环。
 
 ### 输出与签名
 
@@ -143,7 +93,7 @@ xattr -rd com.apple.quarantine /Applications/Shellsmith.app
 | Android 5.0 及以上 | API 21+，支持 `armeabi-v7a`、`arm64-v8a`、`x86`、`x86_64`；不要求每个 APK 都包含四种架构 |
 | Android 4.4 工控兼容 | API 19+；只接受无 Native 库或 Native 库仅含 `armeabi-v7a` 的 APK；真机验证范围为 Android 4.4.2、`armeabi-v7a`/NEON 工控设备 |
 | iOS 源码工程 | iOS 13+；SwiftUI/UIKit 应用 target；Archive、导出与签名仅支持安装完整 Xcode 的 macOS |
-| BYOS 包外密钥 | 仅 Android APK；`device_approval` 要求 `minSdk 26+`，`play_integrity` 要求 `minSdk 29+`；需要可用的自建 HTTPS 服务和网络；AAB、iOS、Android 4.4 兼容模式不支持 |
+| BYOS 包外密钥 | 仅 Android APK；`device_approval` 要求 `minSdk 24+`，`play_integrity` 要求 `minSdk 29+`；需要可用的自建 HTTPS 服务和网络；AAB、iOS、Android 4.4 兼容模式不支持 |
 
 ### 不支持与不会做的事
 
@@ -158,7 +108,7 @@ xattr -rd com.apple.quarantine /Applications/Shellsmith.app
 ### 需要自行验证
 
 - 不同厂商系统和硬件仍需实测，构建通过不代表所有环境可用。
-- Android GUI 和 CLI 都支持 APK/AAB，但 AAB 的 Google Play App Signing、dynamic-feature、Asset Pack 和动态交付仍需在目标应用内测轨道验证。
+- AAB 的 Google Play App Signing、dynamic-feature、Asset Pack 和动态交付仍需在目标应用内测轨道验证。
 - 混合旧 ABI 可逐次确认排除，但优先建议从原工程过滤业务不需要的架构。
 - 16 KB ZIP 对齐不等于所有第三方 `.so` 都满足 ELF 页大小要求，也不等于通过 Google Play 审核。
 
@@ -168,19 +118,57 @@ xattr -rd com.apple.quarantine /Applications/Shellsmith.app
 
 详细边界见[使用指南](docs/usage.md)。
 
+## BYOS 包外密钥
+
+BYOS（Bring Your Own Server）把产物 IKM 从 APK 中移出，适合需要自行保管密钥、控制设备授权和撤销发布权限的应用。
+
+加固时 Shellsmith 为每个产物生成独立 32 字节 IKM，调用自建服务端的注册接口换取 `token_id`。APK 只携带服务地址和 token。应用启动时，客户端生成一次性 RSA 密钥对，带上 token、设备证明或 Play Integrity 证明请求 IKM；服务端验证授权、防重放和设备/Play 状态后，用本次请求的 RSA 公钥加密 `digest[32] || IKM[32]` 返回。客户端解密并校验摘要后才加载业务代码。
+
+### 授权方式
+
+| 方式 | 适用场景 | 要求 |
+|---|---|---|
+| `device_approval` | 国内、侧载、自有分发 | 设备 EC P-256 公钥登记，管理员批准；Android 7.0+（`minSdk 24`） |
+| `play_integrity` | Google Play 分发 | Play Console 与 Google Cloud 服务账号；Android 10+（`minSdk 29`） |
+
+两种方式都不会在失败时回退到离线加载。未知设备只登记为待批准并拒绝；Play 证明失败也不会切换到设备授权。
+
+### 使用流程
+
+1. 按协议部署自建 HTTPS 服务端，创建应用策略和构建 API key。源码构建需分别生成设备授权和 Play 资源：`make build-byos`、`make build-byos-play`；正式发布包已包含对应资源。
+2. 在 Shellsmith 的“密钥交付 → 新增服务”中填写 HTTPS 基础地址、构建 API key、授权方式和最终证书 SHA-256。
+3. 测试连接，加固并签名 APK。每个产物注册后获得新的 `token_id`。
+4. 设备模式首次启动会被拒绝，管理员批准设备后重新启动；Play 模式使用 Play 测试轨道 APK 验证。
+5. 撤销设备或产物后，后续取钥失败；已经进入进程的 IKM 和明文代码无法远程收回。
+
+### 安全边界
+
+- BYOS 让 APK 本身不含 IKM，降低仅凭 APK 离线恢复业务密钥的风险；它不等于 DRM，不能阻止已授权进程的内存提取、Hook 或二次打包分析。
+- 服务端是信任根。服务端、KMS 或 HSM 被攻破后，攻击者可以解封 IKM；必须按服务端文档保护数据库、主密钥、KMS/HSM 权限和备份。
+- 每次启动仍需取钥，DEX 缓存启动也不例外；没有网络或服务端不可用时不会回退到离线加载。撤销只影响后续取钥。
+- 构建 API key 只用于加固注册，不进入 APK，也不具备运行时授权能力。
+- AAB、iOS 和 Android 4.4 兼容模式不支持 BYOS。
+
+Shellsmith 不托管 BYOS 服务端。仓库提供一份可独立部署的 Go/PostgreSQL 参考实现，包含设备批准、Play Integrity、防重放、审计、主密钥轮换和 `migrate-backend`，支持本机 `local_aead`、AWS KMS、GCP KMS（含 Cloud HSM）和 PKCS#11 HSM。
+
+- [BYOS HTTPS 密钥服务接入协议](docs/design/byos-key-server.md)
+- [服务端参考实现与部署](docs/design/byos-key-server-reference.md)
+- [BYOS 本地验证与排障记录](docs/process/byos-local-validation.md)
+- [技术内参中的 DEXB 边界](docs/design/internals.md)
+
 ## 工作原理与安全边界
 
-### Android 链路
+### Android
 
 加固时读取原签名证书，压缩并加密 DEX，注入壳资源，再重新打包、对齐并按需签名。运行时由壳执行安全检查、校验或解密 DEX 缓存，加载业务代码并启动原应用。
 
 默认离线链路的 DEXB v6 载荷加密**不提供针对静态分析的机密性**：包裹密钥的两个输入（签名证书指纹与 build_id）都写在包内头部，仅凭 APK 文件本身即可还原密钥，并进一步解出全部业务 DEX 与 PVM2、加密 assets、业务 `.text` 的派生密钥。该层提供的是「改包重签后无法运行」以及提高自动化扫描与逆向的成本。
 
-BYOS 产物使用 DEXB v7：APK 头部只保存 `server_url` 和 `token_id`，IKM 由服务端保管并在启动时按授权下发，因此仅凭 APK 不能还原 IKM。已授权进程仍会在内存中持有 IKM 和明文代码，撤销只影响后续取钥；详见[BYOS 接入协议](docs/design/byos-key-server.md)和[技术内参](docs/design/internals.md)。
+BYOS 产物使用 DEXB v7：APK 头部只保存 `server_url` 和 `token_id`，IKM 由服务端保管并在启动时按授权下发，因此仅凭 APK 不能还原 IKM。已授权进程仍会在内存中持有 IKM 和明文代码。
 
 当前正式方案会在应用私有目录使用解密后的 DEX 缓存，**不是完整内存 DEX 或方法代码抽取方案**。Root、进程控制或其他高权限环境下，攻击者仍可能提取运行时代码。标准保护不因 Root 信号拒绝启动；严格保护可阻断部分风险环境，但无法保证识别隐藏 Root 或抵御绕过。
 
-### iOS 链路
+### iOS
 
 iOS 流水线只改工作副本：接入精确版本的上游 Swift Package，生成统一威胁事件封装，调用 Apple 原生 Archive/Export，再核验签名、Team ID、Bundle ID、Entitlements、arm64、隐私清单、dSYM 和选定敏感字符串。freeRASP 的闭源检测能力和已知 RootHide 漏检仍属于上游残余风险。
 
@@ -208,7 +196,7 @@ iOS balanced/strict 会让目标应用直接集成 freeRASP；其 `watcherMail`�
 - 功能建议可在设置页的“问题反馈”中选择“需求建议”提交，也可使用[需求表单](https://github.com/kairowan/Shellsmith/issues/new?template=feature_request.yml)；已有相同需求可在原 issue 点赞。
 - 安全漏洞请按 [SECURITY.md](SECURITY.md) 私下报告，不公开可利用细节、业务 APK、证书或密码。
 
-## 文档与开发者入口
+## 文档与开发
 
 | 需要了解 | 文档 |
 |---|---|
@@ -224,16 +212,17 @@ iOS balanced/strict 会让目标应用直接集成 freeRASP；其 `watcherMail`�
 
 CLI 仅供源码构建和自动化使用，Release 不单独提供 CLI 包。构建顺序为先 `make build-stub`，再 `make build-cli` 或 `make build-gui`；完整依赖与平台步骤以构建指南为准。
 
-### CI/CD 与跨平台发布
+<details>
+<summary>CI/CD 与跨平台发布</summary>
 
 GitHub Actions 位于 `.github/workflows/`：
 
-- 每次推送到 `main` 或创建 Pull Request 时运行 Rust、Python、iOS 核心和前端检查。
-- `main` 每次通过 CI 后，Release 工作流会自动计算 `<当前版本>-build.<CI运行号>` 版本，在 Linux、macOS 和 Windows 原生 runner 上构建安装包，并创建 GitHub Release；也可以手动运行 `Release` 发布指定版本。
-- 发布流程会上传 Linux `.AppImage`/`.deb`、macOS `.dmg`、Windows `.exe`、Android runtime 资源包及 SHA-256 校验文件，并自动生成本次提交的变更摘要。
+- 每次推送到 `main` 或创建 Pull Request 时，运行 Rust、Python、iOS 核心和前端检查。
+- `Release` 工作流**仅手动触发**：在 `main` 的提交上运行 `workflow_dispatch`，填写与 `package.json` 一致的版本号。工作流会校验来源和版本，在 Linux、macOS、Windows 原生 runner 上构建安装包并创建 GitHub Release，不会因普通 PR 合并自动发版。
+- 发布产物包括 Linux `.AppImage`/`.deb`、macOS `.dmg`、Windows `.exe`、Android runtime 资源包及 SHA-256 校验文件，并生成更新清单。
 - macOS 默认生成 adhoc 签名包；配置 `MACOS_RELEASE_MODE=developer-id`、Developer ID 身份和 notarytool profile 后，才生成可分发的公证包。
 
-本地也可以复用同一套脚本，版本号直接从 `package.json` 读取，避免与当前发布版本脱节：
+本地也可以复用同一套脚本，版本号直接从 `package.json` 读取：
 
 ```bash
 VERSION=$(node -p "require('./apps/shield-gui/package.json').version")
@@ -245,14 +234,19 @@ Windows 使用管理员 PowerShell：
 
 ```powershell
 $version = (Get-Content apps/shield-gui/package.json | ConvertFrom-Json).version
-.\scripts\release-windows.ps1 -Version $version
+.\scripts/release-windows.ps1 -Version $version
 ```
 
 三平台构建都包含 Stub、PVM2 Packer、Android 资源和签名工具，发布前仍应在目标系统安装并验证。
 
+</details>
+
 ## 致谢
 
-Shellsmith 的加固能力建立在这些上游项目与工具之上：它们定义了本工具的能力边界，或在构建期、运行期直接参与加固。随发布包分发的组件，其许可证与第三方声明见 `tools/licenses/`。
+Shellsmith 的加固能力建立在这些上游项目与工具之上。随发布包分发的组件，其许可证与第三方声明见 `tools/licenses/`。
+
+<details>
+<summary>上游项目与工具</summary>
 
 ### 上游来源工程
 
@@ -264,7 +258,7 @@ Shellsmith 的加固能力建立在这些上游项目与工具之上：它们定
 
 | 项目 | 许可证 | 用途 |
 |---|---|---|
-| [XopProtector](https://github.com/xopJack/XopProtector) | Apache-2.0 | PVM2 与 True-VMP 代码保护；壳运行时源码与打包器源码随本仓库分发（`third_party/xopprotector/`），`xop-pvm2-packer.jar` 随发布包分发，许可证与第三方声明见 `tools/licenses/` |
+| [XopProtector](https://github.com/xopJack/XopProtector) | Apache-2.0 | PVM2 与 True-VMP 代码保护；壳运行时源码与打包器源码随本仓库分发（`third_party/xopprotector/`），`xop-pvm2-packer.jar` 随发布包分发 |
 | [LLVM](https://llvm.org/) | Apache-2.0 WITH LLVM-exception | Native VMP 以 LLVM 21 Pass 插件形式接入业务 Native 构建（`native-vmp/`，独立组件，尚未接入加固流程） |
 
 ### iOS 运行时保护
@@ -278,12 +272,14 @@ Shellsmith 的加固能力建立在这些上游项目与工具之上：它们定
 
 | 项目 | 许可证 | 用途 |
 |---|---|---|
-| [Apktool](https://apktool.org/) 3.0.1 | Apache-2.0 | APK 反编译与重打包，随发布包分发 |
+| [Apktool](https://apktool.org/) 3.0.3 | Apache-2.0 | APK 反编译与重打包，随发布包分发 |
 | [apksigner](https://developer.android.com/tools/apksigner)（Android SDK Build-Tools） | Apache-2.0 | APK 签名与签名校验，随发布包分发 |
 | [bundletool](https://github.com/google/bundletool) · [aapt2](https://developer.android.com/tools) | Apache-2.0 | AAB 模块处理与资源编译 |
 | [Android NDK](https://developer.android.com/ndk) | Apache-2.0 | 壳 Native 库与 Android 4.4 兼容库的编译 |
 
 桌面框架、前端与 Rust 通用库依赖不在本节逐一列出；完整版本与许可证可从 `Cargo.lock`、`apps/shield-gui/package-lock.json` 与 `shield-stub/gradle/libs.versions.toml` 复现。
+
+</details>
 
 如果这里署名有误、许可证标注不准或遗漏了应当致谢的项目，欢迎提交 issue 或 PR，我们会尽快更正。
 
