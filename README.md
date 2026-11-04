@@ -5,7 +5,6 @@
 [![最新版本](https://img.shields.io/github/v/release/kairowan/Shellsmith?style=flat-square&label=最新版本&color=6366f1)](https://github.com/kairowan/Shellsmith/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/kairowan/Shellsmith/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/kairowan/Shellsmith/actions/workflows/ci.yml)
 [![许可证](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square)](#许可证)
-[![请作者喝杯咖啡](https://img.shields.io/badge/%E2%98%95-%E8%AF%B7%E4%BD%9C%E8%80%85%E5%96%9D%E6%9D%AF%E5%92%96%E5%95%A1-ffdd00?style=flat-square)](#请作者喝杯咖啡)
 
 Shellsmith 是一款本地优先的桌面加固工具：Android APK/AAB 与 iOS 源码工程的加固、签名和产物验证都在本机完成，APK、证书和签名材料不会上传。显式启用 BYOS 包外密钥时，产物 IKM 只会发送到你配置的自建 HTTPS 服务，不经过 Shellsmith 维护者。
 
@@ -283,17 +282,6 @@ Shellsmith 的加固能力建立在这些上游项目与工具之上。随发布
 </details>
 
 如果这里署名有误、许可证标注不准或遗漏了应当致谢的项目，欢迎提交 issue 或 PR，我们会尽快更正。
-
-## 请作者喝杯咖啡
-
-如果 Shellsmith 对你有帮助，欢迎请作者喝杯咖啡。你的支持会用于持续维护、兼容性测试和后续功能开发。
-
-| 微信支付（中国大陆） | 支付宝（中国大陆） |
-|:---:|:---:|
-| <img src="docs/assets/donate/wechat-pay.png" height="300" alt="微信支付收款码"> | <img src="docs/assets/donate/alipay.png" height="300" alt="支付宝收款码"> |
-| 微信扫一扫 | 支付宝扫一扫 |
-
-赞助完全自愿，不影响软件功能、开源许可或问题处理优先级。支付前请确认收款人信息。
 
 ## 许可证
 
